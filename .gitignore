@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+*.env.*
+!*.env.example
+node_modules/
+dist/
+.vite/
+*.log
+.DS_Store
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+*:Zone.Identifier

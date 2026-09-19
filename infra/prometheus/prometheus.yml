@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: portal-backend
+    static_configs:
+      - targets: ["portal-backend:8080"]
+    metrics_path: /metrics
+
+  - job_name: token-exchange-service
+    static_configs:
+      - targets: ["token-exchange-service:8081"]
+    metrics_path: /metrics
+
+  - job_name: citizen-gateway
+    static_configs:
+      - targets: ["citizen-gateway:9080"]
+    metrics_path: /metrics
+
+  - job_name: mock-keycloak
+    static_configs:
+      - targets: ["mock-keycloak:8180"]
+    metrics_path: /health

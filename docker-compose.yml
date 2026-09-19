@@ -1,0 +1,184 @@
+version: "3.9"
+
+networks:
+  zone2-net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:
+
+services:
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cdp
+      POSTGRES_USER: cdp_user
+      POSTGRES_PASSWORD: changeme123
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks: [zone2-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cdp_user -d cdp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server /etc/redis/redis.conf
+    volumes:
+      - redisdata:/data
+      - ./infra/redis/redis.conf:/etc/redis/redis.conf
+    ports:
+      - "6379:6379"
+    networks: [zone2-net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "changeme123", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Zone 3 Mocks
+  # ---------------------------------------------------------------------------
+  mock-keycloak:
+    build: ./services/mock-keycloak
+    environment:
+      KC_ISSUER: http://mock-keycloak:8180/realms/hd
+      KC_CLIENT_ID: citizen-gw-exchanger
+      KC_CLIENT_SECRET: exchanger-secret-xyz
+      JWT_TTL: "300"
+    ports:
+      - "8180:8180"
+    networks: [zone2-net]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8180/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mock-internal-gw:
+    build: ./services/mock-internal-gw
+    environment:
+      KC_URL: http://mock-keycloak:8180
+      KC_REALM: hd
+    ports:
+      - "8090:8090"
+    networks: [zone2-net]
+    depends_on:
+      mock-keycloak:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Zone 2 Services
+  # ---------------------------------------------------------------------------
+  token-exchange-service:
+    build:
+      context: .
+      dockerfile: services/token-exchange-service/Dockerfile
+    environment:
+      KEYCLOAK_URL: http://mock-keycloak:8180
+      KEYCLOAK_REALM: hd
+      EXCHANGER_CLIENT_ID: citizen-gw-exchanger
+      EXCHANGER_CLIENT_SECRET: exchanger-secret-xyz
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: changeme123
+      JWT_CACHE_TTL: "240"
+      JWT_TTL: "300"
+    ports:
+      - "8081:8081"
+    networks: [zone2-net]
+    depends_on:
+      redis:
+        condition: service_healthy
+      mock-keycloak:
+        condition: service_healthy
+
+  portal-backend:
+    build:
+      context: .
+      dockerfile: services/portal-backend/Dockerfile
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: cdp
+      POSTGRES_USER: cdp_user
+      POSTGRES_PASSWORD: changeme123
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: changeme123
+      SERVER_KEY: 5f3b8a2c1d9e4f7a6b0c5d2e8f1a3b4c
+      KC_URL: http://mock-keycloak:8180
+      KC_REALM: hd
+      KC_CLIENT_ID: citizen-gw-exchanger
+      KC_CLIENT_SECRET: exchanger-secret-xyz
+    ports:
+      - "8080:8080"
+    networks: [zone2-net]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mock-keycloak:
+        condition: service_healthy
+
+  citizen-gateway:
+    build:
+      context: .
+      dockerfile: services/citizen-gateway/Dockerfile
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: changeme123
+      SERVER_KEY: 5f3b8a2c1d9e4f7a6b0c5d2e8f1a3b4c
+      PORTAL_BACKEND_URL: http://portal-backend:8080
+      TXS_URL: http://token-exchange-service:8081
+      INTERNAL_GW_URL: http://mock-internal-gw:8090
+    ports:
+      - "9080:9080"
+    networks: [zone2-net]
+    depends_on:
+      redis:
+        condition: service_healthy
+      portal-backend:
+        condition: service_started
+      token-exchange-service:
+        condition: service_started
+
+  portal-web:
+    build: ./frontend/portal-web
+    ports:
+      - "3000:80"
+    networks: [zone2-net]
+    depends_on:
+      - portal-backend
+
+  # ---------------------------------------------------------------------------
+  # Observability (minimal)
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks: [zone2-net]
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3001:3000"
+    networks: [zone2-net]
+    depends_on:
+      - prometheus
