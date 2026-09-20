@@ -18,15 +18,23 @@ export const useAuthStore = defineStore('auth', () => {
       sub.value = data.sub
       username.value = data.username
       roles.value = data.roles
-    } catch (e) {
+    } catch {
       console.warn('Not authenticated')
     }
   }
 
-  function setToken(token: string) {
+  async function setToken(token: string) {
     localStorage.setItem('cdp_auth_token', token)
-    fetchMe()
+    await fetchMe()
   }
 
-  return { sub, username, roles, isAdmin, isApiOwner, isAuditor, isAuthenticated, fetchMe, setToken }
+  function logout() {
+    localStorage.removeItem('cdp_auth_token')
+    sub.value = ''
+    username.value = ''
+    roles.value = []
+    window.location.hash = '/login'
+  }
+
+  return { sub, username, roles, isAdmin, isApiOwner, isAuditor, isAuthenticated, fetchMe, setToken, logout }
 })

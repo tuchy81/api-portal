@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, Counter, Gauge
 
-from routers import catalog, applications, tokens, usage, audit, internal, me
+from routers import catalog, applications, tokens, usage, audit, internal, me, dev_auth
 from database import get_pool
 import batch
 
@@ -31,6 +31,7 @@ app.include_router(usage.router, prefix=PREFIX)
 app.include_router(audit.router, prefix=PREFIX)
 app.include_router(internal.router)
 app.include_router(me.router, prefix=PREFIX)
+app.include_router(dev_auth.router, prefix=PREFIX)
 
 # Prometheus metrics
 cdp_active_pat_count = Gauge("cdp_active_pat_count", "Active PAT count", ["status"])

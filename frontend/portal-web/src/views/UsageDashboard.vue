@@ -2,7 +2,15 @@
   <div>
     <h2>사용량 대시보드</h2>
     <div class="card">
-      <p>PAT Token ID: <input v-model="tokenId" class="token-input" placeholder="token_id 입력" @change="loadUsage" /></p>
+      <p>PAT 선택:
+        <select v-model="tokenId" class="token-input" @change="loadUsage">
+          <option value="" disabled>토큰을 선택하세요</option>
+          <option v-for="t in myTokens" :key="t.token_id" :value="t.token_id">
+            {{ t.token_name }} ({{ t.token_id }})
+          </option>
+        </select>
+        <span v-if="myTokens.length === 0" class="hint">발급된 PAT이 없습니다.</span>
+      </p>
       <div v-if="usage">
         <div class="quota-row">
           <div class="quota-box">
@@ -36,11 +44,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import api from '../api/axios'
 
 const tokenId = ref('')
 const usage = ref<any>(null)
+const myTokens = ref<any[]>([])
+
+onMounted(async () => {
+  const { data } = await api.get('/tokens')
+  myTokens.value = (data.items || []).filter((t: any) => t.status === 'ACTIVE')
+})
 
 async function loadUsage() {
   if (!tokenId.value) return
@@ -61,6 +75,7 @@ const monthPct = computed(() => {
 <style scoped>
 h2 { margin-bottom:1rem; }
 .token-input { padding:0.4rem 0.8rem; border:1px solid #ccc; border-radius:4px; width:300px; }
+.hint { font-size:0.8rem; color:#e65100; margin-left:0.5rem; }
 .quota-row { display:flex; gap:2rem; margin-top:1rem; }
 .quota-box { flex:1; }
 .quota-bar { background:#eee; border-radius:4px; height:20px; overflow:hidden; margin:0.5rem 0; }

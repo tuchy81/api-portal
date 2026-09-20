@@ -7,10 +7,14 @@
         <router-link to="/cdp/applications">내 신청</router-link>
         <router-link to="/cdp/tokens">PAT 관리</router-link>
         <router-link to="/cdp/usage">사용량</router-link>
+        <span v-if="auth.isApiOwner || auth.isAdmin">
+          <router-link to="/cdp/approvals">승인 수신함</router-link>
+        </span>
         <span v-if="auth.isAdmin">
           <router-link to="/cdp/admin/audit">감사로그</router-link>
         </span>
         <span class="user-info" v-if="auth.username">{{ auth.username }}</span>
+        <button v-if="auth.isAuthenticated" class="btn-logout" @click="auth.logout">로그아웃</button>
       </div>
     </nav>
     <main class="content">
@@ -34,6 +38,8 @@ body { font-family: 'Noto Sans KR', sans-serif; background: #f5f6fa; }
 .nav-links a { color: #ccc; text-decoration: none; margin-left: 1.5rem; }
 .nav-links a.router-link-active { color: #4fc3f7; }
 .nav-links .user-info { margin-left: 2rem; font-size: 0.85rem; color: #aaa; }
+.btn-logout { margin-left: 1rem; padding: 0.3rem 0.8rem; background: transparent; border: 1px solid #666; border-radius: 4px; color: #ccc; cursor: pointer; font-size: 0.8rem; }
+.btn-logout:hover { border-color: #aaa; color: white; }
 .content { padding: 2rem; max-width: 1200px; margin: 0 auto; }
 .card { background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 1rem; }
 .btn { padding: 0.5rem 1.2rem; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }

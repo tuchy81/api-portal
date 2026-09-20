@@ -4,13 +4,17 @@ import ApiDetail from '../views/ApiDetail.vue'
 import ApplicationForm from '../views/ApplicationForm.vue'
 import MyApplications from '../views/MyApplications.vue'
 import ApprovalInbox from '../views/ApprovalInbox.vue'
+import ApiRegisterForm from '../views/ApiRegisterForm.vue'
 import TokenList from '../views/TokenList.vue'
 import UsageDashboard from '../views/UsageDashboard.vue'
 import AuditLogTable from '../views/AuditLogTable.vue'
+import Login from '../views/Login.vue'
 
 const routes = [
+  { path: '/login', component: Login, meta: { public: true } },
   { path: '/', redirect: '/cdp/catalog' },
   { path: '/cdp/catalog', component: CatalogList },
+  { path: '/cdp/catalog/new', component: ApiRegisterForm },
   { path: '/cdp/catalog/:apiId', component: ApiDetail },
   { path: '/cdp/apply/:apiId', component: ApplicationForm },
   { path: '/cdp/applications', component: MyApplications },
@@ -20,7 +24,16 @@ const routes = [
   { path: '/cdp/admin/audit', component: AuditLogTable },
 ]
 
-export default createRouter({
+const router = createRouter({
   history: createWebHashHistory(),
   routes,
 })
+
+router.beforeEach((to) => {
+  const hasToken = !!localStorage.getItem('cdp_auth_token')
+  if (!to.meta.public && !hasToken) {
+    return '/login'
+  }
+})
+
+export default router

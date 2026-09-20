@@ -167,7 +167,7 @@ async def token_endpoint(
         allowed_user_scopes.update(["openid", "profile"])
         final_scopes = [s for s in requested_scopes if s in allowed_user_scopes or s.startswith("capi.")] if requested_scopes else list(allowed_user_scopes)
 
-        extra = {"cdp_channel": "citizen"}
+        extra = {"cdp_channel": "citizen", "preferred_username": user["username"]}
         if pat_id:
             extra["cdp_pat_id"] = pat_id
 

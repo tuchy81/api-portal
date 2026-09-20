@@ -8,7 +8,15 @@
       <div class="modal">
         <h3>PAT 발급</h3>
         <div v-if="!plainToken">
-          <label>신청 ID (appId): <input v-model="form.appId" class="input" placeholder="승인된 신청 app_id" /></label>
+          <label>신청한 API:
+            <select v-model="form.appId" class="input">
+              <option value="" disabled>승인된 신청을 선택하세요</option>
+              <option v-for="app in approvedApps" :key="app.app_id" :value="app.app_id">
+                {{ app.api_name }} ({{ app.app_id?.slice(0, 8) }}...)
+              </option>
+            </select>
+            <span v-if="approvedApps.length === 0" class="hint">승인된 신청이 없습니다. 먼저 API 신청 후 승인을 받으세요.</span>
+          </label>
           <label>토큰 이름: <input v-model="form.tokenName" class="input" /></label>
           <label>유효기간 (일, 1~90): <input v-model.number="form.validDays" type="number" min="1" max="90" class="input" /></label>
           <p class="warning">⚠️ 발급된 PAT은 이 화면에서만 1회 확인 가능합니다. 안전한 곳에 보관하세요.</p>
@@ -65,10 +73,19 @@ const plainToken = ref<string | null>(null)  // 로컬 전용, 스토어 저장 
 const copied = ref(false)
 const confirmed = ref(false)
 const issuing = ref(false)
+const approvedApps = ref<any[]>([])
 
 const form = ref({ appId: '', tokenName: '자동화 스크립트', validDays: 90 })
 
-onMounted(() => tokenStore.fetchList())
+async function loadApprovedApps() {
+  const { data } = await api.get('/applications')
+  approvedApps.value = (data.items || []).filter((a: any) => a.status === 'APPROVED')
+}
+
+onMounted(() => {
+  tokenStore.fetchList()
+  loadApprovedApps()
+})
 
 onUnmounted(() => {
   plainToken.value = null  // 명시적 소거
@@ -127,4 +144,5 @@ label { display:block; margin-bottom:0.8rem; }
 .token-box { background:#1a1a2e; border-radius:4px; padding:1rem; margin-bottom:1rem; word-break:break-all; }
 .token-box code { color:#4fc3f7; font-size:0.85rem; }
 .confirm-label { display:flex; align-items:center; gap:0.5rem; margin:1rem 0; font-size:0.85rem; }
+.hint { display:block; color:#e65100; font-size:0.8rem; margin-top:0.3rem; }
 </style>

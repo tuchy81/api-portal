@@ -1,6 +1,9 @@
 <template>
   <div>
-    <h2>API 카탈로그</h2>
+    <div class="catalog-header">
+      <h2>API 카탈로그</h2>
+      <router-link v-if="auth.isApiOwner || auth.isAdmin" to="/cdp/catalog/new" class="btn btn-primary">+ API 등록</router-link>
+    </div>
     <div class="search-bar">
       <input v-model="query" placeholder="API 이름/코드 검색..." @input="search" class="search-input" />
     </div>
@@ -27,6 +30,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import api from '../api/axios'
+import { useAuthStore } from '../stores/auth'
+
+const auth = useAuthStore()
 
 const apis = ref<any[]>([])
 const loading = ref(false)
@@ -46,7 +52,8 @@ onMounted(search)
 </script>
 
 <style scoped>
-h2 { margin-bottom: 1.5rem; }
+.catalog-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+.catalog-header h2 { margin-bottom: 0; }
 .search-bar { margin-bottom: 1rem; }
 .search-input { width: 100%; max-width: 400px; padding: 0.5rem 1rem; border: 1px solid #ccc; border-radius: 6px; font-size: 0.9rem; }
 .api-card { margin-bottom: 1rem; }
