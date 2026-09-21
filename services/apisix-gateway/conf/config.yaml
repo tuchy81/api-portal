@@ -1,0 +1,53 @@
+apisix:
+  node_listen: 9080
+  enable_admin: true
+  enable_ipv6: false
+  # Custom plugin lookup root — see services/apisix-gateway/plugins/. Files
+  # live under apisix/plugins/<name>.lua so `require("apisix.plugins.<name>")`
+  # resolves via this extra search path (Lua's package.searchpath swaps the
+  # module name's dots for '/').
+  extra_lua_path: "/usr/local/apisix-custom/?.lua"
+
+# etcd-backed dynamic config: portal-backend provisions routes through the
+# Admin API when an API is registered in the catalog (spec section 8), and
+# re-syncs every PUBLISHED catalog entry on its own startup. This replaced
+# the earlier static "data_plane + yaml" setup (conf/apisix.yaml), which
+# only covered a hardcoded set of routes and had no registration pipeline.
+deployment:
+  role: traditional
+  role_traditional:
+    config_provider: etcd
+  admin:
+    admin_key_required: true
+    admin_key:
+      - name: admin
+        # Dev-only key, same convention as this repo's other shared secrets
+        # (SERVER_KEY, REDIS_PASSWORD, ...). Matches portal-backend's
+        # APISIX_ADMIN_KEY default in services/portal-backend/config.py.
+        key: edd1c9f034335f136f87ad84b625c8f1
+        role: admin
+    allow_admin:
+      - 0.0.0.0/0  # dev only — Admin API is only reachable inside zone2-net anyway
+    admin_listen:
+      ip: 0.0.0.0
+      port: 9180
+  etcd:
+    host:
+      - "http://etcd:2379"
+    prefix: /apisix
+    timeout: 30
+
+# Only the plugins this gateway actually uses — keeps the request path lean.
+plugins:
+  - proxy-rewrite
+  - prometheus
+  - pat-auth
+  - pat-quota
+  - pat-token-exchange
+  - pat-audit
+
+plugin_attr:
+  prometheus:
+    export_addr:
+      ip: 0.0.0.0  # default is 127.0.0.1, which Prometheus (separate container) can't reach
+      port: 9091

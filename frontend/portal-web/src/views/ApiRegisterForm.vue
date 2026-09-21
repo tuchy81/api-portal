@@ -30,6 +30,16 @@
         </section>
 
         <section>
+          <h3>OpenAPI 스펙</h3>
+          <p class="hint">OpenAPI 3.x JSON 파일을 업로드하면 카탈로그 상세에서 열람할 수 있습니다. (선택)</p>
+          <input type="file" accept="application/json,.json" class="input" @change="onSpecFile" />
+          <p v-if="specError" class="spec-error">⚠️ {{ specError }}</p>
+          <p v-else-if="specSummary" class="spec-ok">
+            ✅ {{ specSummary.title }} (v{{ specSummary.version }}) — 경로 {{ specSummary.pathCount }}개 인식됨
+          </p>
+        </section>
+
+        <section>
           <h3>스코프 <span class="required">*</span></h3>
           <p class="hint">PAT 발급 시 부여할 수 있는 권한 단위입니다.</p>
           <div v-for="(scope, i) in form.scopes" :key="i" class="scope-row">
@@ -64,6 +74,10 @@ import api from '../api/axios'
 const router = useRouter()
 const submitting = ref(false)
 
+const specError = ref('')
+const specSummary = ref<{ title: string; version: string; pathCount: number } | null>(null)
+const openapiSpec = ref<Record<string, any> | null>(null)
+
 const form = ref({
   apiCode: '',
   name: '',
@@ -74,6 +88,31 @@ const form = ref({
   scopes: [{ scopeName: '', httpMethod: 'GET', pathPattern: '', description: '' }],
 })
 
+async function onSpecFile(e: Event) {
+  specError.value = ''
+  specSummary.value = null
+  openapiSpec.value = null
+
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+
+  try {
+    const parsed = JSON.parse(await file.text())
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      specError.value = 'OpenAPI 스펙은 JSON 객체여야 합니다.'
+      return
+    }
+    openapiSpec.value = parsed
+    specSummary.value = {
+      title: parsed.info?.title || '(제목 없음)',
+      version: parsed.info?.version || '-',
+      pathCount: Object.keys(parsed.paths || {}).length,
+    }
+  } catch (err: any) {
+    specError.value = `JSON 파싱 실패: ${err.message}`
+  }
+}
+
 function addScope() {
   form.value.scopes.push({ scopeName: '', httpMethod: 'GET', pathPattern: '', description: '' })
 }
@@ -83,9 +122,16 @@ function removeScope(i: number) {
 }
 
 async function submit() {
+  if (specError.value) {
+    alert('OpenAPI 스펙 파일을 확인하세요: ' + specError.value)
+    return
+  }
   submitting.value = true
   try {
-    await api.post('/catalog/apis', form.value)
+    await api.post('/catalog/apis', {
+      ...form.value,
+      ...(openapiSpec.value ? { openapiSpec: openapiSpec.value } : {}),
+    })
     alert('API가 등록되었습니다.')
     router.push('/cdp/catalog')
   } catch (e: any) {
@@ -105,6 +151,8 @@ label { display: block; margin-bottom: 0.9rem; font-size: 0.9rem; color: #333; }
 textarea.input { resize: vertical; }
 .required { color: #c62828; }
 .hint { font-size: 0.8rem; color: #666; margin-bottom: 0.8rem; }
+.spec-error { font-size: 0.85rem; color: #c62828; margin-top: 0.6rem; }
+.spec-ok { font-size: 0.85rem; color: #2e7d32; margin-top: 0.6rem; }
 .scope-row { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; align-items: center; }
 .scope-name { flex: 2; }
 .scope-method { flex: 0 0 90px; }

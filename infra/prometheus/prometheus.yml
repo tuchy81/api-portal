@@ -14,8 +14,8 @@ scrape_configs:
 
   - job_name: citizen-gateway
     static_configs:
-      - targets: ["citizen-gateway:9080"]
-    metrics_path: /metrics
+      - targets: ["citizen-gateway:9091"]
+    metrics_path: /apisix/prometheus/metrics
 
   - job_name: mock-keycloak
     static_configs:

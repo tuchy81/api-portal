@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     retry_wait_ms: int = 200
     request_timeout_s: float = 3.0
     node_id: str = Field(default_factory=lambda: secrets.token_hex(8))
+    # Caller authentication for /internal/token-exchange. The shared secret is
+    # the primary control; allowed_cidr is the spec-mandated IP allowlist but is
+    # weak on its own in Docker/K8s where caller IPs are dynamic.
+    internal_api_key: str = ""
     allowed_cidr: str = "0.0.0.0/0"
 
     class Config:

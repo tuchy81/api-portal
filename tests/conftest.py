@@ -14,6 +14,9 @@ KC_URL      = "http://[::1]:8180"
 REDIS_HOST  = "::1"
 REDIS_PORT  = 6379
 REDIS_PW    = "changeme123"
+# Gateway -> TXS / portal-backend internal calls are authenticated with this
+# shared secret; tests that stand in for the gateway must present it too.
+INTERNAL_KEY = "internal-shared-key-devonly"
 
 # Pre-seeded approved application ID
 APPROVED_APP_ID = "b2000000-0000-0000-0000-000000000001"
@@ -80,7 +83,8 @@ async def gateway_client():
 
 @pytest_asyncio.fixture
 async def txs_client():
-    client = httpx.AsyncClient(base_url=TXS_URL, timeout=30)
+    client = httpx.AsyncClient(base_url=TXS_URL, timeout=30,
+                               headers={"X-Internal-Key": INTERNAL_KEY})
     yield client
     try:
         await client.aclose()

@@ -8,15 +8,53 @@
       <div class="modal">
         <h3>PAT 발급</h3>
         <div v-if="!plainToken">
-          <label>신청한 API:
-            <select v-model="form.appId" class="input">
-              <option value="" disabled>승인된 신청을 선택하세요</option>
-              <option v-for="app in approvedApps" :key="app.app_id" :value="app.app_id">
-                {{ app.api_name }} ({{ app.app_id?.slice(0, 8) }}...)
-              </option>
-            </select>
-            <span v-if="approvedApps.length === 0" class="hint">승인된 신청이 없습니다. 먼저 API 신청 후 승인을 받으세요.</span>
-          </label>
+          <div class="field">
+            <span class="field-label">신청한 API <em>(승인된 신청 중 선택)</em></span>
+            <p v-if="approvedApps.length === 0" class="hint">
+              승인된 신청이 없습니다. 먼저 API 신청 후 승인을 받으세요.
+            </p>
+            <div v-else class="app-list">
+              <label
+                v-for="app in approvedApps"
+                :key="app.app_id"
+                class="app-card"
+                :class="{ selected: form.appId === app.app_id }"
+              >
+                <input type="radio" :value="app.app_id" v-model="form.appId" />
+                <div class="app-body">
+                  <div class="app-head">
+                    <strong>{{ app.api_name }}</strong>
+                    <code v-if="app.api_code" class="chip">{{ app.api_code }}</code>
+                  </div>
+                  <div class="app-row" v-if="app.public_path">
+                    <span class="k">주소</span><code>{{ app.public_path }}</code>
+                  </div>
+                  <div class="app-row">
+                    <span class="k">부여 Scope</span>
+                    <span class="scopes">
+                      <code v-for="s in (app.granted_scopes || [])" :key="s" class="chip scope">{{ s }}</code>
+                      <em v-if="!(app.granted_scopes || []).length">없음</em>
+                    </span>
+                  </div>
+                  <div class="app-row" v-if="requestedOnly(app).length">
+                    <span class="k">신청만 됨</span>
+                    <span class="scopes">
+                      <code v-for="s in requestedOnly(app)" :key="s" class="chip scope muted">{{ s }}</code>
+                    </span>
+                  </div>
+                  <div class="app-row" v-if="app.purpose">
+                    <span class="k">신청 목적</span><span class="purpose">{{ app.purpose }}</span>
+                  </div>
+                  <div class="app-meta">
+                    <span v-if="app.reviewed_at">승인 {{ app.reviewed_at.slice(0, 10) }}</span>
+                    <span v-if="app.valid_until">사용기한 {{ String(app.valid_until).slice(0, 10) }}</span>
+                    <span v-if="app.expected_daily">예상 {{ app.expected_daily }}건/일</span>
+                    <span class="appid">신청 {{ app.app_id?.slice(0, 8) }}</span>
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
           <label>토큰 이름: <input v-model="form.tokenName" class="input" /></label>
           <label>유효기간 (일, 1~90): <input v-model.number="form.validDays" type="number" min="1" max="90" class="input" /></label>
           <p class="warning">⚠️ 발급된 PAT은 이 화면에서만 1회 확인 가능합니다. 안전한 곳에 보관하세요.</p>
@@ -82,6 +120,14 @@ async function loadApprovedApps() {
   approvedApps.value = (data.items || []).filter((a: any) => a.status === 'APPROVED')
 }
 
+// Scopes the applicant asked for that didn't survive approval (R-08 narrows the
+// grant to requested ∩ published). Worth surfacing so the PAT's actual reach
+// isn't mistaken for the original request.
+function requestedOnly(app: any): string[] {
+  const granted = new Set<string>(app.granted_scopes || [])
+  return (app.requested_scopes || []).filter((s: string) => !granted.has(s))
+}
+
 onMounted(() => {
   tokenStore.fetchList()
   loadApprovedApps()
@@ -145,4 +191,25 @@ label { display:block; margin-bottom:0.8rem; }
 .token-box code { color:#4fc3f7; font-size:0.85rem; }
 .confirm-label { display:flex; align-items:center; gap:0.5rem; margin:1rem 0; font-size:0.85rem; }
 .hint { display:block; color:#e65100; font-size:0.8rem; margin-top:0.3rem; }
+
+.field { margin-bottom:0.9rem; }
+.field-label { display:block; font-weight:600; margin-bottom:0.4rem; }
+.field-label em { font-weight:400; color:#666; font-style:normal; font-size:0.8rem; }
+.app-list { display:flex; flex-direction:column; gap:0.5rem; max-height:20rem; overflow-y:auto; padding-right:0.2rem; }
+.app-card { display:flex; gap:0.6rem; align-items:flex-start; border:1px solid #ddd; border-radius:6px; padding:0.7rem 0.8rem; cursor:pointer; margin:0; }
+.app-card:hover { border-color:#90caf9; background:#fafcff; }
+.app-card.selected { border-color:#1976d2; background:#f2f8ff; box-shadow:0 0 0 1px #1976d2 inset; }
+.app-card input { margin-top:0.25rem; flex-shrink:0; }
+.app-body { flex:1; min-width:0; }
+.app-head { display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.35rem; }
+.app-row { display:flex; gap:0.5rem; font-size:0.82rem; margin-bottom:0.2rem; }
+.app-row .k { color:#777; flex-shrink:0; min-width:4.5rem; }
+.app-row code { background:#f1f3f5; border-radius:3px; padding:0 0.3rem; word-break:break-all; }
+.scopes { display:flex; flex-wrap:wrap; gap:0.25rem; }
+.chip { background:#eceff1; border-radius:3px; padding:0.05rem 0.35rem; font-size:0.78rem; }
+.chip.scope { background:#e3f2fd; color:#0d47a1; }
+.chip.scope.muted { background:#f5f5f5; color:#999; text-decoration:line-through; }
+.purpose { color:#333; word-break:break-word; }
+.app-meta { display:flex; flex-wrap:wrap; gap:0.7rem; margin-top:0.4rem; font-size:0.75rem; color:#888; }
+.app-meta .appid { font-family:monospace; }
 </style>

@@ -8,6 +8,7 @@ import ApiRegisterForm from '../views/ApiRegisterForm.vue'
 import TokenList from '../views/TokenList.vue'
 import UsageDashboard from '../views/UsageDashboard.vue'
 import AuditLogTable from '../views/AuditLogTable.vue'
+import AdminTokenTable from '../views/AdminTokenTable.vue'
 import Login from '../views/Login.vue'
 
 const routes = [
@@ -21,6 +22,7 @@ const routes = [
   { path: '/cdp/approvals', component: ApprovalInbox },
   { path: '/cdp/tokens', component: TokenList },
   { path: '/cdp/usage', component: UsageDashboard },
+  { path: '/cdp/admin/tokens', component: AdminTokenTable },
   { path: '/cdp/admin/audit', component: AuditLogTable },
 ]
 

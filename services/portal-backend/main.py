@@ -1,12 +1,15 @@
 """Portal Backend API — main application."""
+import asyncio
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, Counter, Gauge
 
-from routers import catalog, applications, tokens, usage, audit, internal, me, dev_auth
+from routers import catalog, applications, tokens, usage, audit, internal, me, dev_auth, admin_tokens
+from config import settings
 from database import get_pool
+import apisix_client
 import batch
 
 logging.basicConfig(level=logging.INFO)
@@ -29,18 +32,59 @@ app.include_router(applications.router, prefix=PREFIX)
 app.include_router(tokens.router, prefix=PREFIX)
 app.include_router(usage.router, prefix=PREFIX)
 app.include_router(audit.router, prefix=PREFIX)
+app.include_router(admin_tokens.router, prefix=PREFIX)
 app.include_router(internal.router)
 app.include_router(me.router, prefix=PREFIX)
-app.include_router(dev_auth.router, prefix=PREFIX)
+if settings.enable_dev_auth:
+    # dev-login mints a signed JWT for any user id with no credentials, so the
+    # routes only exist when explicitly switched on (local compose).
+    app.include_router(dev_auth.router, prefix=PREFIX)
+    logger.warning("dev auth endpoints are ENABLED — never do this outside local development")
 
 # Prometheus metrics
 cdp_active_pat_count = Gauge("cdp_active_pat_count", "Active PAT count", ["status"])
 cdp_api_requests_total = Counter("cdp_api_requests_total", "API call count", ["token_id", "api_code", "status"])
 
+async def resync_gateway_routes():
+    """Re-PUT every PUBLISHED catalog entry's APISIX route on startup —
+    etcd starts empty, so this is what repopulates it (spec section 8's
+    registration pipeline is what keeps it populated afterwards). Runs as a
+    background task with its own retry/backoff per route rather than
+    blocking app startup: there's no depends_on from portal-backend to
+    citizen-gateway (that would cycle back, since citizen-gateway already
+    depends on portal-backend), so APISIX/etcd may not be reachable yet
+    when this first runs.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as db:
+        rows = await db.fetch("SELECT * FROM cdp.api_catalog WHERE status='PUBLISHED'")
+        scopes_by_api = {
+            row["api_id"]: await db.fetch("SELECT * FROM cdp.api_scope WHERE api_id=$1", row["api_id"])
+            for row in rows
+        }
+
+    for row in rows:
+        api_row = {"api_code": row["api_code"], "upstream_url": row["upstream_url"], "public_path": row["public_path"]}
+        scope_rows = [
+            {"scope_name": s["scope_name"], "http_method": s["http_method"]}
+            for s in scopes_by_api[row["api_id"]]
+        ]
+        for attempt in range(10):
+            try:
+                await apisix_client.upsert_route(api_row, scope_rows)
+                break
+            except Exception as e:
+                if attempt == 9:
+                    logger.error(f"gateway route resync gave up for {row['api_code']}: {e}")
+                else:
+                    await asyncio.sleep(2)
+    logger.info(f"Gateway route resync attempted for {len(rows)} published APIs")
+
 @app.on_event("startup")
 async def startup():
     await get_pool()
     batch.start_scheduler()
+    asyncio.create_task(resync_gateway_routes())
     logger.info("Portal Backend started")
 
 @app.on_event("shutdown")

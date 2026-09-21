@@ -11,6 +11,7 @@
           <router-link to="/cdp/approvals">승인 수신함</router-link>
         </span>
         <span v-if="auth.isAdmin">
+          <router-link to="/cdp/admin/tokens">전체 PAT</router-link>
           <router-link to="/cdp/admin/audit">감사로그</router-link>
         </span>
         <span class="user-info" v-if="auth.username">{{ auth.username }}</span>

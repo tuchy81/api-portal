@@ -42,6 +42,7 @@ CREATE TABLE cdp.application (
     valid_until    DATE        NOT NULL,
     status         VARCHAR(30) NOT NULL DEFAULT 'PENDING'
                    CHECK (status IN ('PENDING','APPROVED','REJECTED','EXPIRED','WITHDRAWN')),
+    requested_scopes TEXT[]    NOT NULL DEFAULT '{}',
     granted_scopes TEXT[]      NOT NULL DEFAULT '{}',
     reviewer_sub   VARCHAR(64),
     review_comment TEXT,
@@ -114,6 +115,11 @@ CREATE TABLE cdp.audit_log_2026_12 PARTITION OF cdp.audit_log
     FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
 CREATE TABLE cdp.audit_log_2027_01 PARTITION OF cdp.audit_log
     FOR VALUES FROM ('2027-01-01') TO ('2027-02-01');
+
+-- 안전망: 월별 파티션 생성 배치(BAT-CDP-06)가 어떤 이유로든 밀려도 INSERT가 실패하지
+-- 않도록 DEFAULT 파티션을 둔다. 배치는 여기 쌓인 행을 정상 파티션으로 옮기지 않으므로,
+-- DEFAULT에 행이 쌓이고 있다면 배치가 동작하지 않는다는 신호로 봐야 한다.
+CREATE TABLE cdp.audit_log_default PARTITION OF cdp.audit_log DEFAULT;
 
 -- 사용량 집계 (일 단위)
 CREATE TABLE cdp.usage_stat_daily (

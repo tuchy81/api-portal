@@ -9,10 +9,17 @@
 
 ## 핵심 설계 불변 규칙 (전 단계 적용)
 1. PAT 평문은 발급 응답 1회 외 어떤 스토어/로그에도 저장 금지
-2. Redis 키: `cdp:pat:{tokenId}` → HMAC 값 저장 (Argon2id는 DB만)
+2. Redis 키: `cdp:pat:{tokenId}` → HMAC 값 저장 (DB에는 SHA256 해시만 — 2026-09-21 변경, 아래 참고)
 3. Lua 쿼터 스크립트가 원자성 보장 — Python fallback 아님
 4. JWT 캐시 삭제 시 `cdp:jwtidx:{tokenId}` Set 역색인으로 처리 (KEYS/SCAN 금지)
 5. 전체 오류 응답은 RFC 9457 `application/problem+json` 포맷
+
+> **2026-09-21 갱신**: `cdp.pat.token_hash`를 Argon2id → SHA256으로 변경 (`pat_utils.hash_secret_sha256`).
+> 여전히 단방향 해시라 DB 단독 유출로는 평문 복구가 불가능합니다. Argon2id의 느리고 메모리 소모적인 특성은
+> 사람이 고른 저-엔트로피 패스워드의 오프라인 무차별 대입을 늦추기 위한 것인데, 여기서 해시하는 대상은
+> 사람이 고르는 게 아니라 `generate_secret()`이 만드는 32바이트(256비트) CSPRNG 값이라 그 방어가 의미가
+> 없어 SHA256으로 단순화(요청에 따른 변경, AES256 등 양방향 암호화는 명시적으로 거부 — 평문 복구가 가능해져
+> 규칙 1번과 충돌).
 
 ---
 
@@ -89,7 +96,7 @@
 - [x] **3.4** `services/portal-backend/pat_utils.py`:
   - `generate_token_id()` — base62 12자
   - `generate_secret()` — 32바이트 CSPRNG → base64url 43자
-  - `hash_secret()` — Argon2id (m=19456KB, t=2, p=1, len=32)
+  - `hash_secret_sha256()` — SHA256 hex digest (2026-09-21 변경 전: Argon2id — 위 핵심 규칙 2번 참고)
   - `compute_hmac()` — HMAC-SHA256(secret, SERVER_KEY) → hex (게이트웨이용)
 - [x] **3.5** `services/portal-backend/redis_client.py` — PAT 메타 캐시 CRUD, JWT 색인 삭제
 - [x] **3.6** `services/portal-backend/auth.py` — Bearer JWT 검증, 사용자 클레임 추출
@@ -117,9 +124,16 @@
 
 ---
 
-## Phase 4 — Citizen Gateway (Python FastAPI 프록시)
+## Phase 4 — Citizen Gateway
 
-APISIX 대신 Python FastAPI로 동일한 게이트웨이 로직 구현 (PAT 인증 + 쿼터 + 토큰 교환 + 프록시).
+> **2026-09-21 갱신**: 아래 Python FastAPI 목업을 걷어내고 스펙 6장대로 실제 Apache
+> APISIX 3.9 + 커스텀 Lua 플러그인으로 교체했습니다 (`apisix` 브랜치). 상세는
+> `services/apisix-gateway/` 참조. 라우트는 etcd/Admin API 없이 `conf/apisix.yaml`
+> 선언형 설정(data_plane + yaml provider)으로 정적 관리하며, 이는 기존
+> `scope_config.py`도 정적 매핑이었던 것과 동일한 범위입니다 — 8장의 "카탈로그 등록 →
+> Admin API 라우트 자동생성" 파이프라인은 이전에도 미구현이었고 이번에도 범위 밖입니다.
+
+~~APISIX 대신 Python FastAPI로 동일한 게이트웨이 로직 구현 (PAT 인증 + 쿼터 + 토큰 교환 + 프록시).~~ (아래는 옛 구현 기록)
 
 - [x] **4.1** `services/citizen-gateway/Dockerfile` + `requirements.txt`
 - [x] **4.2** `services/citizen-gateway/config.py` + `services/citizen-gateway/redis_client.py`
@@ -144,6 +158,45 @@ APISIX 대신 Python FastAPI로 동일한 게이트웨이 로직 구현 (PAT 인
 - [x] **4.7** `services/citizen-gateway/proxy.py` — httpx 역방향 프록시 (헤더 처리, 스트리밍)
 - [x] **4.8** `services/citizen-gateway/scope_config.py` — 라우트별 required_scope_map 설정
 - [x] **4.9** `services/citizen-gateway/main.py` — 플러그인 체인 조립, 라우트 매핑
+
+### Phase 4 (2026-09-21 재구현) — Apache APISIX
+
+- [x] **4.10** `services/apisix-gateway/conf/config.yaml` — `data_plane`+`yaml` 배포모드,
+      커스텀 플러그인 `extra_lua_path`, `prometheus` 플러그인 노출(9091)
+- [x] **4.11** `services/apisix-gateway/conf/apisix.yaml` — 정적 라우트 3종(vendors/orders/employees) +
+      `internal-gateway` 업스트림, 라우트별 플러그인 체인 (스펙 6.1절)
+- [x] **4.12** `services/apisix-gateway/plugins/citizen/common.lua` — Redis 연결, HMAC-SHA256
+      (resty.sha256 기반 수동 구현, Python `hmac` 대비 검증 완료), RFC 9457 problem+json,
+      PAT 마스킹, JWT jti 추출
+- [x] **4.13** `services/apisix-gateway/plugins/apisix/plugins/pat-auth.lua` — 스펙 6.2절 (rewrite phase)
+- [x] **4.14** `services/apisix-gateway/plugins/apisix/plugins/pat-quota.lua` — 스펙 6.3절 (access phase,
+      `infra/redis/quota_deduct.lua` EVALSHA — 기존 스크립트 그대로 재사용)
+- [x] **4.15** `services/apisix-gateway/plugins/apisix/plugins/pat-token-exchange.lua` — 스펙 6.4절 (access phase)
+- [x] **4.16** `services/apisix-gateway/plugins/apisix/plugins/pat-audit.lua` — 스펙 6.5절 (log phase,
+      워커별 배치 후 `ngx.timer.at`로 비동기 전송)
+- [x] **4.17** `docker-compose.yml` — `citizen-gateway` 서비스를 커스텀 빌드 대신
+      `apache/apisix:3.9.1-debian` 이미지 + 볼륨 마운트로 교체 (etcd 불필요)
+
+> **2026-09-21 추가 갱신**: 8장 "카탈로그 등록 → APISIX Admin 라우트 자동생성" 파이프라인
+> 구현. `data_plane`+`yaml` 정적 설정을 걷어내고 `etcd` 서비스 + APISIX `traditional`+`etcd`
+> Admin API로 전환.
+> - [x] **4.18** `docker-compose.yml` — `etcd`(bitnamilegacy/etcd) 서비스 추가, APISIX
+>       `config.yaml`을 `enable_admin: true` + `deployment.admin`/`deployment.etcd`로 전환
+> - [x] **4.19** `services/portal-backend/apisix_client.py` — 카탈로그 행 + scope 목록으로
+>       라우트 JSON 빌드(`PUT /apisix/admin/routes/{id}`), 삭제, smoke test(비인증 호출이
+>       APISIX 기본 404가 아니라 pat-auth의 401 CDP-1002를 받는지로 "라우트+플러그인 체인이
+>       실제로 연결됐는지" 확인)
+> - [x] **4.20** `routers/catalog.py` — `POST /catalog/apis`: DB INSERT(DRAFT) → Admin API
+>       라우트 생성 → smoke test → 성공 시 PUBLISHED, 실패 시 라우트 롤백 + DRAFT 유지 +
+>       `CDP-5001` 반환. `PATCH /catalog/apis/{id}`: status 변경 시 라우트 upsert/delete 동기화
+> - [x] **4.21** `main.py` — 시작 시 `status='PUBLISHED'` 카탈로그 전체를 재동기화(etcd는
+>       빈 상태로 시작하므로 필수). `citizen-gateway → portal-backend` depends_on이 이미
+>       있어 역방향 depends_on을 걸면 순환되므로, 개별 라우트마다 재시도/백오프로 처리
+> - 라우트 ID 규칙(`capi-{code}-{version}`)과 `regex_uri` 재작성은 `/capi/vN` 버전
+>   접두어만 치환하고 리소스명 이하는 그대로 전달 — `upstream_url`이 API별 공통 베이스
+>   경로(리소스명 미포함)라는 시드 데이터 관례에 맞춘 것. 처음엔 `public_path` 전체를
+>   치환하는 버전으로 구현했다가 리소스명이 통째로 날아가는 버그를 실제 등록 테스트로
+>   잡아서 수정함
 
 ---
 
@@ -210,6 +263,33 @@ APISIX 대신 Python FastAPI로 동일한 게이트웨이 로직 구현 (PAT 인
 - [x] **8.1** `infra/prometheus/prometheus.yml` — portal-backend, TXS, citizen-gateway 스크레이프 설정
 - [x] **8.2** portal-backend에 `cdp_active_pat_count`, `cdp_api_requests_total` 지표 추가
 - [x] **8.3** `infra/grafana/dashboards/cdp_overview.json` — 요청률, 교환 히트율, PAT 수, 쿼터 거부율 패널
+
+---
+
+---
+
+## Phase 9 — 설계문서 대비 갭 점검 및 보완 (2026-09-21)
+
+설계문서(SA-ARCH-CDP-001 / SA-SPEC-CDP-002)의 유스케이스·요구사항 대비 구현을 전수 점검하고
+결과를 `architecture_gap_analysis.md`로 정리. 그중 P0 5건과 지시된 보완 5건을 반영.
+
+- [x] **9.1** `architecture_implemented.md` — 구현된 아키텍처 문서화(구성도·시퀀스·ER·파이프라인)
+- [x] **9.2** `architecture_gap_analysis.md` — UC-01~13 / R-01~12 커버리지 점검, 갭 24건 심각도 분류
+- [x] **9.3** GAP-01 감사로그 유실 — `pat-audit.lua` 워커별 주기 타이머 플러시 + 종료 시 플러시
+      (실측 42/91 → **91/91**)
+- [x] **9.4** GAP-02/03 내부 신뢰 경계 — TXS·`/internal/*`에 `X-Internal-Key` + TXS `allowed_cidr` 실검증
+- [x] **9.5** GAP-04 `ENABLE_DEV_AUTH` 게이팅(기본 false)
+- [x] **9.6** GAP-05 `audit_log_default` 안전망 + `BAT-CDP-06` 월 파티션 선생성
+- [x] **9.7** R-08 — 승인자 Scope 지정 제거, 부여 Scope = 신청 ∩ 카탈로그(서버 계산), 신청 단계 Scope 검증
+- [x] **9.8** UC-01 — 카탈로그 OpenAPI 스펙 업로드/저장/조회 + 등록 폼·상세 화면
+- [x] **9.9** UC-07 — `BAT-CDP-01` avg/p95 지연 집계, usage API `errorRate`·`summary`, 대시보드 지표·추이
+- [x] **9.10** UC-10 / R-12 — `GET/POST /admin/tokens*`(만료·발급자·사용자ID 리스트 조회, 일괄 회수) +
+      `/cdp/admin/tokens` 관리자 화면
+- [x] **9.11** 회귀 테스트 4건 추가(SEC-05/06, TC-P-04/05) → **23/23 통과**
+
+> 미조치 갭(P1 8건·P2 11건·P3)은 `architecture_gap_analysis.md`에 그대로 유효합니다.
+> 특히 BFF 전환(GAP-08), MFE 통합(GAP-24), 게이트웨이 Prometheus 지표 복구(GAP-09),
+> 퇴직자 PAT 강제폐기(GAP-10)가 남아 있습니다.
 
 ---
 

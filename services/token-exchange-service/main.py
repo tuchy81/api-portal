@@ -8,6 +8,7 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 import redis_client as rc
 import circuit_breaker as cb_module
 import cache as jwt_cache
+import caller_auth
 import metrics as m
 from config import settings
 
@@ -23,6 +24,7 @@ app = FastAPI(title="Token Exchange Service")
 async def startup():
     r = rc.get_redis()
     rc.load_lua_scripts(r)
+    caller_auth.warn_if_unprotected()
     logger.info("TXS started. Redis connected.")
 
 # ---------------------------------------------------------------------------
@@ -44,6 +46,10 @@ class ExchangeResponse(BaseModel):
 # ---------------------------------------------------------------------------
 @app.post("/internal/token-exchange", response_model=ExchangeResponse)
 async def token_exchange(req: ExchangeRequest, request: Request):
+    denied = caller_auth.check_caller(request)
+    if denied:
+        return denied
+
     r = rc.get_redis()
 
     # Circuit breaker check

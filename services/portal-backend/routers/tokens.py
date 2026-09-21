@@ -69,7 +69,7 @@ async def issue_pat(
     token_id = pat_utils.generate_token_id()
     secret = pat_utils.generate_secret()
     full_token = pat_utils.build_pat(token_id, secret)
-    token_hash = pat_utils.hash_secret_argon2(secret)
+    token_hash = pat_utils.hash_secret_sha256(secret)
     hmac_val = pat_utils.compute_hmac(secret, settings.server_key)
 
     granted_scopes = app["granted_scopes"] or []

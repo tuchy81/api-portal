@@ -93,6 +93,9 @@ services:
       REDIS_PASSWORD: changeme123
       JWT_CACHE_TTL: "240"
       JWT_TTL: "300"
+      # Only the gateway may ask for an impersonated JWT — without this the
+      # exchange endpoint would mint a token for any user on request.
+      INTERNAL_API_KEY: internal-shared-key-devonly
     ports:
       - "8081:8081"
     networks: [zone2-net]
@@ -120,6 +123,20 @@ services:
       KC_REALM: hd
       KC_CLIENT_ID: citizen-gw-exchanger
       KC_CLIENT_SECRET: exchanger-secret-xyz
+      # Catalog registration -> APISIX Admin API auto route provisioning
+      # (spec section 8). citizen-gateway is intentionally NOT a depends_on
+      # here — that would create a startup cycle (citizen-gateway already
+      # depends on portal-backend). apisix_client retries instead.
+      APISIX_ADMIN_URL: http://citizen-gateway:9180
+      APISIX_ADMIN_KEY: edd1c9f034335f136f87ad84b625c8f1
+      GATEWAY_URL: http://citizen-gateway:9080
+      TXS_URL: http://token-exchange-service:8081
+      PORTAL_BACKEND_INTERNAL_URL: http://portal-backend:8080
+      # Guards /internal/* (PAT metadata + audit ingest) against anyone on the
+      # network. Pushed into the gateway plugin config by apisix_client.
+      INTERNAL_API_KEY: internal-shared-key-devonly
+      # Mock SSO for the local stack only — must be false anywhere real.
+      ENABLE_DEV_AUTH: "true"
     ports:
       - "8080:8080"
     networks: [zone2-net]
@@ -131,27 +148,40 @@ services:
       mock-keycloak:
         condition: service_healthy
 
-  citizen-gateway:
-    build:
-      context: .
-      dockerfile: services/citizen-gateway/Dockerfile
+  etcd:
+    image: bitnamilegacy/etcd:latest
     environment:
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: changeme123
-      SERVER_KEY: 5f3b8a2c1d9e4f7a6b0c5d2e8f1a3b4c
-      PORTAL_BACKEND_URL: http://portal-backend:8080
-      TXS_URL: http://token-exchange-service:8081
-      INTERNAL_GW_URL: http://mock-internal-gw:8090
+      ALLOW_NONE_AUTHENTICATION: "yes"
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+    networks: [zone2-net]
+    healthcheck:
+      test: ["CMD-SHELL", "etcdctl endpoint health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  citizen-gateway:
+    image: apache/apisix:3.9.1-debian
+    volumes:
+      - ./services/apisix-gateway/conf/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./services/apisix-gateway/plugins:/usr/local/apisix-custom:ro
+      - ./infra/redis/quota_deduct.lua:/opt/redis-scripts/quota_deduct.lua:ro
     ports:
       - "9080:9080"
+      - "9091:9091"
+      - "9180:9180"
     networks: [zone2-net]
     depends_on:
       redis:
         condition: service_healthy
+      etcd:
+        condition: service_healthy
       portal-backend:
         condition: service_started
       token-exchange-service:
+        condition: service_started
+      mock-internal-gw:
         condition: service_started
 
   portal-web:
@@ -161,6 +191,7 @@ services:
     networks: [zone2-net]
     depends_on:
       - portal-backend
+      - citizen-gateway
 
   # ---------------------------------------------------------------------------
   # Observability (minimal)

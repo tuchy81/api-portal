@@ -1,7 +1,7 @@
 """Internal endpoints called by citizen gateway."""
-import json, logging
+import hmac, json, logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 import asyncpg
 from database import get_db
@@ -11,7 +11,19 @@ from config import settings
 from datetime import datetime, timezone
 
 logger = logging.getLogger("portal.internal")
-router = APIRouter(prefix="/internal", tags=["internal"])
+
+
+def require_internal_key(x_internal_key: Optional[str] = Header(None)):
+    """These endpoints hand out PAT metadata and accept audit records, so an
+    unauthenticated caller could enumerate tokens or forge the audit trail.
+    The gateway plugins send this header (see apisix_client._build_route)."""
+    if not settings.internal_api_key:
+        return
+    if not x_internal_key or not hmac.compare_digest(x_internal_key, settings.internal_api_key):
+        raise HTTPException(403, detail={"code": "CDP-1005", "message": "Invalid internal API key"})
+
+
+router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(require_internal_key)])
 
 class AuditBatchItem(BaseModel):
     token_id: Optional[str] = None
@@ -54,7 +66,7 @@ async def get_pat_meta(
 
     if ttl > 0:
         rc.cache_pat_meta(r, token_id, {
-            "hmac": pat["token_hash"],  # Note: DB stores Argon2 hash, but gateway uses HMAC
+            "hmac": pat["token_hash"],  # Note: DB stores a SHA256 hash, but gateway uses HMAC
             # For gateway to work, we need to store HMAC — but it's not stored in DB
             # The gateway should NOT use this fallback for HMAC verification in production
             # (HMAC is stored only during initial issuance in Redis)
