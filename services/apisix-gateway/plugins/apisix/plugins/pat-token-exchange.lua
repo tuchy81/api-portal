@@ -42,13 +42,59 @@ local function scope_hash(scopes)
     return common.sha256_hex(table.concat(copy, " ")):sub(1, 8)
 end
 
+-- Fixed claim -> upstream header mapping (HR/org context internal APIs
+-- rely on). Only these claims are promoted to headers; anything else in the
+-- JWT stays out of the request unless added here.
+local CLAIM_HEADER_MAP = {
+    user_id     = "X-USER-ID",
+    company     = "X-COMPANY",
+    org_cd      = "X-ORG-CD",
+    asgn_cd     = "X-ASGN-CD",
+    dept_cd     = "X-DEPT-CD",
+    job_tit_cd  = "X-JOB-TIT-CD",
+    offi_res_cd = "X-OFFI-RES-CD",
+    user_origin = "X-USER-ORIGIN",
+}
+
+-- Lowercased lookup set so strip_spoofable_headers can block a client from
+-- pre-seeding any of these before the gateway sets the real value.
+local CLAIM_HEADER_NAMES_LOWER = {}
+for _, header_name in pairs(CLAIM_HEADER_MAP) do
+    CLAIM_HEADER_NAMES_LOWER[header_name:lower()] = true
+end
+
 local function strip_spoofable_headers(ctx)
     local headers = core.request.headers(ctx)
     for name, _ in pairs(headers) do
         local lname = name:lower()
         if lname:find("^x%-citizen%-") or lname == "x-forwarded-user"
-            or lname == "x-user-sub" or lname == "cookie" then
+            or lname == "x-user-sub" or lname == "cookie"
+            or CLAIM_HEADER_NAMES_LOWER[lname] then
             core.request.set_header(ctx, name, nil)
+        end
+    end
+end
+
+-- Sets each mapped header from the exchanged JWT's claims. A claim that
+-- isn't present in this particular JWT is simply left unset — the client's
+-- own attempt to set it was already wiped by strip_spoofable_headers above,
+-- so there's nothing to overwrite either way.
+local function inject_claim_headers(ctx, jwt)
+    local claims = common.decode_jwt_payload(jwt)
+    if not claims then
+        core.log.warn("pat-token-exchange: could not decode JWT payload for claim header injection")
+        return
+    end
+    for claim_name, header_name in pairs(CLAIM_HEADER_MAP) do
+        local value = claims[claim_name]
+        if value ~= nil then
+            local header_value
+            if type(value) == "table" then
+                header_value = cjson.encode(value)
+            else
+                header_value = tostring(value)
+            end
+            core.request.set_header(ctx, header_name, header_value)
         end
     end
 end
@@ -123,6 +169,7 @@ function _M.access(conf, ctx)
     core.request.set_header(ctx, "X-Citizen-PAT-Id", token_id)
     core.request.set_header(ctx, "X-Citizen-Channel", "citizen")
     core.request.set_header(ctx, "X-Request-Id", ctx.cdp_trace_id)
+    inject_claim_headers(ctx, jwt)
 
     core.response.set_header("X-Request-Id", ctx.cdp_trace_id)
 end

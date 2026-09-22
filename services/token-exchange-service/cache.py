@@ -57,7 +57,7 @@ async def get_or_exchange_jwt(
 
     if lock_acquired:
         try:
-            result = await keycloak_client.exchange_token(token_id, user_sub, scopes)
+            result = await keycloak_client.exchange_token(user_sub, scopes)
             jwt = result["access_token"]
             r.setex(ckey, settings.jwt_cache_ttl, jwt)
             r.sadd(_idx_key(token_id), ckey)
@@ -85,7 +85,7 @@ async def _refresh_jwt(token_id: str, user_sub: str, scopes: list[str], r: redis
         lkey = _lock_key(token_id, sh)
         if r.set(lkey, node_id, nx=True, px=5000):
             try:
-                result = await keycloak_client.exchange_token(token_id, user_sub, scopes)
+                result = await keycloak_client.exchange_token(user_sub, scopes)
                 r.setex(ckey, settings.jwt_cache_ttl, result["access_token"])
                 r.sadd(_idx_key(token_id), ckey)
                 r.expire(_idx_key(token_id), settings.jwt_ttl)

@@ -29,10 +29,11 @@ async def get_exchanger_token() -> str:
         _svc_token_cache["expires_at"] = now + data.get("expires_in", 300) - 50
         return _svc_token_cache["token"]
 
-async def exchange_token(token_id: str, user_sub: str, scopes: list[str]) -> dict:
+async def exchange_token(user_sub: str, scopes: list[str]) -> dict:
     """RFC 8693 token exchange: impersonate user_sub with given scopes."""
     svc_token = await get_exchanger_token()
     scope_str = " ".join(scopes)
+    user_sub = user_sub.lower()
 
     async with httpx.AsyncClient(timeout=settings.request_timeout_s) as client:
         resp = await client.post(
@@ -46,7 +47,6 @@ async def exchange_token(token_id: str, user_sub: str, scopes: list[str]) -> dic
                 "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
                 "audience": "internal-api-gateway",
                 "scope": scope_str,
-                "cdp_pat_id": token_id,
             },
         )
         resp.raise_for_status()

@@ -29,7 +29,27 @@ class ApiPatchRequest(BaseModel):
     status: Optional[str] = None
     description: Optional[str] = None
     name: Optional[str] = None
+    ownerDept: Optional[str] = None
+    upstreamUrl: Optional[str] = None
+    publicPath: Optional[str] = None
+    requiredRoles: Optional[list[str]] = None
+    scopes: Optional[list[dict]] = None  # full replace when provided: [{scopeName, httpMethod, pathPattern, description}]
     openapiSpec: Optional[dict] = None
+
+
+def _assert_can_modify(row: asyncpg.Record, user: UserClaims, action: str, api_id: str):
+    """None if the caller may modify/delete this catalog row, else a 403
+    cdp_error response. Only the API's own owner or a platform-admin may
+    act on it — merely holding the api-owner role isn't enough, otherwise
+    any API owner could edit or delete someone else's API (mirrors the
+    PAT-ownership check in routers/tokens.py's revoke_pat)."""
+    if "platform-admin" in user.roles:
+        return None
+    if "api-owner" not in user.roles:
+        return cdp_error("CDP-4003", f"Only API owners or admins can {action} APIs", f"/catalog/apis/{api_id}")
+    if row["owner_sub"] != user.sub:
+        return cdp_error("CDP-4003", f"Cannot {action} another owner's API", f"/catalog/apis/{api_id}")
+    return None
 
 @router.get("")
 async def list_apis(
@@ -152,55 +172,145 @@ async def patch_api(
     db: asyncpg.Connection = Depends(get_db),
     user: UserClaims = Depends(get_current_user),
 ):
-    if not any(r in user.roles for r in ["api-owner", "platform-admin"]):
-        return cdp_error("CDP-4003", "Only API owners or admins can modify APIs", f"/catalog/apis/{api_id}")
-
     row = await db.fetchrow("SELECT * FROM cdp.api_catalog WHERE api_id=$1", uuid.UUID(api_id))
     if not row:
         raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "API not found"})
 
+    denied = _assert_can_modify(row, user, "modify", api_id)
+    if denied:
+        return denied
+
+    if all(v is None for v in (
+        req.status, req.name, req.description, req.ownerDept, req.upstreamUrl,
+        req.publicPath, req.requiredRoles, req.scopes, req.openapiSpec,
+    )):
+        raise HTTPException(400, detail="No fields to update")
+
+    if req.scopes is not None:
+        async with db.transaction():
+            await db.execute("DELETE FROM cdp.api_scope WHERE api_id=$1", uuid.UUID(api_id))
+            for scope in req.scopes:
+                await db.execute(
+                    """INSERT INTO cdp.api_scope (api_id, scope_name, http_method, path_pattern, description)
+                       VALUES ($1,$2,$3,$4,$5)""",
+                    uuid.UUID(api_id), scope["scopeName"], scope["httpMethod"],
+                    scope["pathPattern"], scope.get("description")
+                )
+
+    # Keep the gateway route in sync with anything that changes what APISIX
+    # needs to know (path, upstream, scopes) or whether the route should
+    # exist at all (status) — and do it BEFORE committing `status` to the DB,
+    # mirroring create_api: the DB must never claim PUBLISHED for a route
+    # that wasn't actually (re)registered. Getting this order backwards is
+    # exactly how a PATCH can report success while the gateway 404s the
+    # public path (a real bug this fixes — see 2/2 catalog test).
+    requested_status = req.status if req.status is not None else row["status"]
+    new_public_path = req.publicPath if req.publicPath is not None else row["public_path"]
+    new_upstream_url = req.upstreamUrl if req.upstreamUrl is not None else row["upstream_url"]
+    route_relevant_changed = any([
+        req.status is not None and req.status != row["status"],
+        req.publicPath is not None and req.publicPath != row["public_path"],
+        req.upstreamUrl is not None and req.upstreamUrl != row["upstream_url"],
+        req.scopes is not None,
+    ])
+
+    final_status = requested_status
+    warning = None
+    if route_relevant_changed:
+        try:
+            if requested_status == "PUBLISHED":
+                if row["status"] == "PUBLISHED" and new_public_path != row["public_path"]:
+                    # public_path drives the APISIX route id (route_id_for) —
+                    # a changed path means a different route, so the old one
+                    # would otherwise be orphaned in APISIX.
+                    await apisix_client.delete_route(row["api_code"], row["public_path"])
+                scopes = await db.fetch("SELECT * FROM cdp.api_scope WHERE api_id=$1", uuid.UUID(api_id))
+                api_row = {"api_code": row["api_code"], "upstream_url": new_upstream_url, "public_path": new_public_path}
+                scope_rows = [{"scope_name": s["scope_name"], "http_method": s["http_method"]} for s in scopes]
+                await apisix_client.upsert_route(api_row, scope_rows)
+                if not await apisix_client.smoke_test(new_public_path):
+                    raise RuntimeError("smoke test did not get the expected 401 from pat-auth")
+            elif row["status"] == "PUBLISHED":
+                await apisix_client.delete_route(row["api_code"], row["public_path"])
+        except Exception as e:
+            logger.warning(f"gateway route sync failed for {row['api_code']} ({requested_status}): {e}")
+            warning = "API Gateway(APISIX)에 등록되지 않았습니다. 추후 다시 등록해 주세요."
+            if requested_status == "PUBLISHED":
+                # The route isn't actually live — don't let the DB claim
+                # otherwise. Falls back to DRAFT rather than the old status,
+                # since upstream_url/public_path/scopes may have already
+                # changed underneath the previously-live route.
+                final_status = "DRAFT"
+
     updates = []
     values = []
     idx = 1
-    if req.status:
-        updates.append(f"status=${idx}"); values.append(req.status); idx += 1
-    if req.name:
-        updates.append(f"name=${idx}"); values.append(req.name); idx += 1
-    if req.description is not None:
-        updates.append(f"description=${idx}"); values.append(req.description); idx += 1
+    scalar_fields = {
+        "status": final_status if (req.status is not None or final_status != row["status"]) else None,
+        "name": req.name,
+        "description": req.description,
+        "owner_dept": req.ownerDept,
+        "upstream_url": req.upstreamUrl,
+        "public_path": req.publicPath,
+        "required_roles": req.requiredRoles,
+    }
+    for column, value in scalar_fields.items():
+        if value is not None:
+            updates.append(f"{column}=${idx}"); values.append(value); idx += 1
     if req.openapiSpec is not None:
         updates.append(f"openapi_spec=${idx}::jsonb"); values.append(json.dumps(req.openapiSpec)); idx += 1
-    if not updates:
-        raise HTTPException(400, detail="No fields to update")
 
-    updates.append(f"updated_at=now()")
-    values.append(uuid.UUID(api_id))
-    await db.execute(
-        f"UPDATE cdp.api_catalog SET {', '.join(updates)} WHERE api_id=${idx}",
-        *values
-    )
+    if updates:
+        updates.append("updated_at=now()")
+        values.append(uuid.UUID(api_id))
+        await db.execute(
+            f"UPDATE cdp.api_catalog SET {', '.join(updates)} WHERE api_id=${idx}",
+            *values
+        )
 
-    # Keep the gateway route in sync with a status change. Best-effort: the
-    # DB status is the source of truth either way, and a failed sync here
-    # self-heals on the next portal-backend startup (see main.py) or the
-    # next successful PATCH.
-    warning = None
-    if req.status and req.status != row["status"]:
-        try:
-            if req.status == "PUBLISHED":
-                scopes = await db.fetch("SELECT * FROM cdp.api_scope WHERE api_id=$1", uuid.UUID(api_id))
-                api_row = {"api_code": row["api_code"], "upstream_url": row["upstream_url"], "public_path": row["public_path"]}
-                scope_rows = [{"scope_name": s["scope_name"], "http_method": s["http_method"]} for s in scopes]
-                await apisix_client.upsert_route(api_row, scope_rows)
-                if not await apisix_client.smoke_test(row["public_path"]):
-                    raise RuntimeError("smoke test did not get the expected 401 from pat-auth")
-            else:
-                await apisix_client.delete_route(row["api_code"], row["public_path"])
-        except Exception as e:
-            logger.warning(f"gateway route sync failed for {row['api_code']} ({req.status}): {e}")
-            warning = "API Gateway(APISIX)에 등록되지 않았습니다. 추후 다시 등록해 주세요."
-
-    result = {"apiId": api_id, "updated": True}
+    result = {"apiId": api_id, "updated": True, "status": final_status}
     if warning:
         result["warning"] = warning
     return result
+
+
+@router.delete("/{api_id}", status_code=204)
+async def delete_api(
+    api_id: str,
+    db: asyncpg.Connection = Depends(get_db),
+    user: UserClaims = Depends(get_current_user),
+):
+    row = await db.fetchrow("SELECT * FROM cdp.api_catalog WHERE api_id=$1", uuid.UUID(api_id))
+    if not row:
+        raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "API not found"})
+
+    denied = _assert_can_modify(row, user, "delete", api_id)
+    if denied:
+        return denied
+
+    # cdp.application.api_id -> cdp.api_catalog has no ON DELETE CASCADE
+    # (usage history is meant to survive an API's removal), so a hard
+    # DELETE would fail the FK constraint once any application references
+    # this API. Surface that as a clear conflict instead of a raw DB error,
+    # and point the caller at the existing RETIRED-status path (PATCH),
+    # which is how this catalog already models "no longer available"
+    # without breaking that history.
+    in_use = await db.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM cdp.application WHERE api_id=$1)", uuid.UUID(api_id)
+    )
+    if in_use:
+        return cdp_error(
+            "CDP-4009",
+            "API has existing applications and cannot be permanently deleted; "
+            "set status to RETIRED instead via PATCH /catalog/apis/{api_id}",
+            f"/catalog/apis/{api_id}",
+        )
+
+    if row["status"] == "PUBLISHED":
+        try:
+            await apisix_client.delete_route(row["api_code"], row["public_path"])
+        except Exception as e:
+            logger.warning(f"gateway route delete failed for {row['api_code']}: {e}")
+
+    await db.execute("DELETE FROM cdp.api_catalog WHERE api_id=$1", uuid.UUID(api_id))
+    logger.info(f"API {row['api_code']} deleted by {user.sub}")

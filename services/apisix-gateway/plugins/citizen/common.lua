@@ -165,10 +165,13 @@ function _M.mask_pat(text)
     return masked
 end
 
--- Unverified JWT payload peek, just to pull `jti` for audit correlation
--- (the JWT was already verified by the internal gateway upstream; the
--- gateway itself only needs the claim, not to re-validate the signature).
-function _M.extract_jwt_jti(jwt)
+-- Unverified JWT payload decode — returns the full claims table, or nil on
+-- any malformed input. Not a security check: the JWT reaching this gateway
+-- either came straight from a trusted call to the Token Exchange Service
+-- (pat-token-exchange) or was already verified by the internal gateway
+-- upstream — callers here only need the claims, not to re-validate the
+-- signature.
+function _M.decode_jwt_payload(jwt)
     if not jwt then
         return nil
     end
@@ -187,11 +190,13 @@ function _M.extract_jwt_jti(jwt)
     if not raw then
         return nil
     end
-    local data = cjson.decode(raw)
-    if not data then
-        return nil
-    end
-    return data.jti
+    return cjson.decode(raw)
+end
+
+-- Pulls just `jti` out of a JWT, for audit correlation (pat-audit.lua).
+function _M.extract_jwt_jti(jwt)
+    local claims = _M.decode_jwt_payload(jwt)
+    return claims and claims.jti or nil
 end
 
 return _M
