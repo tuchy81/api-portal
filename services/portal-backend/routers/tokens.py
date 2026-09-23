@@ -1,6 +1,6 @@
 """PAT lifecycle endpoints."""
 import uuid, logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -48,6 +48,20 @@ async def issue_pat(
     if not app or app["user_sub"] != user.sub:
         return cdp_error("CDP-4003", "Application not approved or not owned by you", "/tokens")
 
+    # The application's valid_until (usage period end date, set at application
+    # time and reviewed by the approver) was never enforced here before — a
+    # citizen could request validDays up to pat_max_days regardless of what
+    # was actually approved. Cap the PAT's expiry at end-of-day valid_until so
+    # a PAT can never outlive the approved usage window.
+    valid_until_end = datetime.combine(app["valid_until"], time.max, tzinfo=timezone.utc)
+    if valid_until_end <= datetime.now(timezone.utc):
+        return cdp_error(
+            "CDP-4009",
+            f"Application's approved usage period ended on {app['valid_until']}; "
+            "request a new application before issuing a PAT",
+            "/tokens",
+        )
+
     # Check PAT limits
     active_per_app = await db.fetchval(
         "SELECT COUNT(*) FROM cdp.pat WHERE app_id=$1 AND status='ACTIVE'",
@@ -74,7 +88,9 @@ async def issue_pat(
 
     granted_scopes = app["granted_scopes"] or []
     now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(days=req.validDays)
+    requested_expires_at = now + timedelta(days=req.validDays)
+    expires_at = min(requested_expires_at, valid_until_end)
+    capped_by_valid_until = expires_at < requested_expires_at
     ttl_seconds = int((expires_at - now).total_seconds())
 
     async with db.transaction():
@@ -116,8 +132,13 @@ async def issue_pat(
     )
 
     logger.info(f"PAT {token_id} issued for user {user.sub}, app {req.appId}")
+    if capped_by_valid_until:
+        logger.info(
+            f"PAT {token_id}: requested validDays={req.validDays} capped to "
+            f"application {req.appId}'s valid_until={app['valid_until']}"
+        )
 
-    return {
+    result = {
         "tokenId": token_id,
         "token": full_token,
         "tokenName": req.tokenName,
@@ -131,6 +152,12 @@ async def issue_pat(
         "expiresAt": expires_at.isoformat(),
         "warning": "토큰 평문은 본 응답에서만 확인 가능합니다. 재조회할 수 없습니다.",
     }
+    if capped_by_valid_until:
+        result["validityWarning"] = (
+            f"신청 승인 시 사용기한({app['valid_until']})이 요청한 유효기간보다 짧아, "
+            f"만료일이 {expires_at.date().isoformat()}로 단축되었습니다."
+        )
+    return result
 
 @router.get("")
 async def list_pats(

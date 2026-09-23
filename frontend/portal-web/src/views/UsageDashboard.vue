@@ -1,64 +1,53 @@
 <template>
   <div>
     <h2>사용량 대시보드</h2>
-    <div class="card">
-      <p>PAT 선택:
-        <select v-model="tokenId" class="token-input" @change="loadUsage">
-          <option value="" disabled>토큰을 선택하세요</option>
-          <option v-for="t in myTokens" :key="t.token_id" :value="t.token_id">
-            {{ t.token_name }} ({{ t.token_id }})
-          </option>
-        </select>
-        <select v-model.number="days" class="days-input" @change="loadUsage">
-          <option :value="7">최근 7일</option>
-          <option :value="30">최근 30일</option>
-          <option :value="90">최근 90일</option>
-        </select>
+    <el-card shadow="never">
+      <div class="controls">
+        <span>PAT 선택:</span>
+        <el-select v-model="tokenId" placeholder="토큰을 선택하세요" class="token-input" @change="loadUsage">
+          <el-option v-for="t in myTokens" :key="t.token_id" :value="t.token_id" :label="`${t.token_name} (${t.token_id})`" />
+        </el-select>
+        <el-select v-model="days" class="days-input" @change="loadUsage">
+          <el-option :value="7" label="최근 7일" />
+          <el-option :value="30" label="최근 30일" />
+          <el-option :value="90" label="최근 90일" />
+        </el-select>
         <span v-if="myTokens.length === 0" class="hint">발급된 PAT이 없습니다.</span>
-      </p>
+      </div>
 
       <div v-if="usage">
         <!-- 요약 지표 -->
-        <div class="stat-row">
-          <div class="stat-tile">
-            <span class="stat-label">총 호출</span>
-            <strong class="stat-value">{{ fmtInt(summary.totalCalls) }}</strong>
-          </div>
-          <div class="stat-tile">
-            <span class="stat-label">오류</span>
-            <strong class="stat-value">{{ fmtInt(summary.totalErrors) }}</strong>
-          </div>
-          <div class="stat-tile">
-            <span class="stat-label">오류율</span>
-            <strong class="stat-value" :class="errorRateClass">{{ fmtPct(summary.errorRate) }}</strong>
-          </div>
-          <div class="stat-tile">
-            <span class="stat-label">평균 응답시간</span>
-            <strong class="stat-value">{{ fmtMs(summary.avgLatencyMs) }}</strong>
-          </div>
-          <div class="stat-tile">
-            <span class="stat-label">P95 응답시간</span>
-            <strong class="stat-value">{{ fmtMs(summary.p95LatencyMs) }}</strong>
-          </div>
-        </div>
+        <el-row :gutter="16" class="stat-row">
+          <el-col :span="4" :xs="12">
+            <el-statistic title="총 호출" :value="summary.totalCalls" />
+          </el-col>
+          <el-col :span="4" :xs="12">
+            <el-statistic title="오류" :value="summary.totalErrors" />
+          </el-col>
+          <el-col :span="4" :xs="12">
+            <el-statistic title="오류율" :value="summary.errorRate * 100" :precision="2" suffix="%" :value-style="errorRateStyle" />
+          </el-col>
+          <el-col :span="4" :xs="12">
+            <el-statistic title="평균 응답시간" :value="summary.avgLatencyMs" suffix="ms" />
+          </el-col>
+          <el-col :span="4" :xs="12">
+            <el-statistic title="P95 응답시간" :value="summary.p95LatencyMs" suffix="ms" />
+          </el-col>
+        </el-row>
 
         <!-- 쿼터 -->
-        <div class="quota-row">
-          <div class="quota-box">
+        <el-row :gutter="32" class="quota-row">
+          <el-col :span="12">
             <h4>오늘 사용량</h4>
-            <div class="quota-bar">
-              <div class="quota-fill" :style="{width: todayPct + '%'}"></div>
-            </div>
+            <el-progress :percentage="todayPct" :stroke-width="16" />
             <p>{{ usage.liveToday.calls }} / {{ usage.liveToday.quota }}</p>
-          </div>
-          <div class="quota-box">
+          </el-col>
+          <el-col :span="12">
             <h4>이번 달 사용량</h4>
-            <div class="quota-bar">
-              <div class="quota-fill monthly" :style="{width: monthPct + '%'}"></div>
-            </div>
+            <el-progress :percentage="monthPct" :stroke-width="16" color="#67c23a" />
             <p>{{ usage.liveMonth.calls }} / {{ usage.liveMonth.quota }}</p>
-          </div>
-        </div>
+          </el-col>
+        </el-row>
 
         <!-- 응답시간 추이 -->
         <div v-if="series.length" class="chart-block">
@@ -81,29 +70,21 @@
           </div>
         </div>
 
-        <table style="margin-top:1rem">
-          <thead>
-            <tr>
-              <th>날짜</th><th>호출수</th><th>오류수</th><th>오류율</th>
-              <th>평균 지연(ms)</th><th>P95 지연(ms)</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="d in series" :key="d.date">
-              <td>{{ d.date }}</td>
-              <td>{{ fmtInt(d.calls) }}</td>
-              <td>{{ fmtInt(d.errors) }}</td>
-              <td :class="d.errorRate > 0.05 ? 'err-high' : ''">{{ fmtPct(d.errorRate) }}</td>
-              <td>{{ fmtMs(d.avgLatencyMs) }}</td>
-              <td>{{ fmtMs(d.p95LatencyMs) }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <el-table :data="series" style="width:100%; margin-top:1rem">
+          <el-table-column prop="date" label="날짜" width="110" />
+          <el-table-column label="호출수"><template #default="{ row }">{{ fmtInt(row.calls) }}</template></el-table-column>
+          <el-table-column label="오류수"><template #default="{ row }">{{ fmtInt(row.errors) }}</template></el-table-column>
+          <el-table-column label="오류율">
+            <template #default="{ row }"><span :class="row.errorRate > 0.05 ? 'err-high' : ''">{{ fmtPct(row.errorRate) }}</span></template>
+          </el-table-column>
+          <el-table-column label="평균 지연(ms)"><template #default="{ row }">{{ fmtMs(row.avgLatencyMs) }}</template></el-table-column>
+          <el-table-column label="P95 지연(ms)"><template #default="{ row }">{{ fmtMs(row.p95LatencyMs) }}</template></el-table-column>
+        </el-table>
         <p v-if="!series.length" class="hint-muted">집계된 일별 통계가 없습니다. (집계 배치는 매일 00:05 실행)</p>
       </div>
       <p v-else-if="tokenId">로딩 중...</p>
       <p v-else>위에서 PAT을 선택하세요.</p>
-    </div>
+    </el-card>
   </div>
 </template>
 
@@ -170,7 +151,7 @@ const summary = computed(() => {
   }
 })
 
-const errorRateClass = computed(() => (summary.value.errorRate > 0.05 ? 'err-high' : ''))
+const errorRateStyle = computed(() => (summary.value.errorRate > 0.05 ? { color: '#c62828' } : {}))
 
 const latencyMax = computed(() => {
   const vals = series.value.flatMap((d) => [d.avgLatencyMs, d.p95LatencyMs])
@@ -213,34 +194,30 @@ const fmtMs = (n: number) => `${Math.round(n ?? 0)}ms`
 </script>
 
 <style scoped>
-h2 { margin-bottom:1rem; }
-.token-input { padding:0.4rem 0.8rem; border:1px solid #ccc; border-radius:4px; width:300px; }
-.days-input { padding:0.4rem 0.8rem; border:1px solid #ccc; border-radius:4px; margin-left:0.5rem; }
-.hint { font-size:0.8rem; color:#e65100; margin-left:0.5rem; }
-.hint-muted { font-size:0.85rem; color:#888; margin-top:0.8rem; }
-.stat-row { display:flex; gap:1rem; margin-top:1rem; flex-wrap:wrap; }
-.stat-tile { flex:1; min-width:120px; background:#f5f6fa; border-radius:6px; padding:0.8rem 1rem; }
-.stat-label { display:block; font-size:0.75rem; color:#666; margin-bottom:0.3rem; }
-.stat-value { font-size:1.3rem; color:#1a1a2e; }
-.err-high { color:#c62828; }
-.quota-row { display:flex; gap:2rem; margin-top:1.5rem; }
-.quota-box { flex:1; }
-.quota-bar { background:#eee; border-radius:4px; height:20px; overflow:hidden; margin:0.5rem 0; }
-.quota-fill { background:#1565c0; height:100%; transition:width 0.3s; }
-.quota-fill.monthly { background:#4caf50; }
-.chart-block { margin-top:1.5rem; }
-.chart-block h4 { font-size:0.9rem; margin-bottom:0.5rem; }
-.legend { font-weight:normal; font-size:0.75rem; color:#666; margin-left:0.5rem; }
-.sw { display:inline-block; width:10px; height:3px; margin:0 0.3rem 0 0.6rem; vertical-align:middle; }
-.sw.avg { background:#1565c0; }
-.sw.p95 { background:#ef6c00; }
-.chart { width:100%; height:120px; background:#fafafa; border-radius:4px; }
-.chart .axis { stroke:#ddd; stroke-width:1; }
-.chart .line { fill:none; stroke-width:2; vector-effect:non-scaling-stroke; }
-.chart .line.avg { stroke:#1565c0; }
-.chart .line.p95 { stroke:#ef6c00; }
-.chart-scale { font-size:0.75rem; color:#888; margin-top:0.3rem; }
-.err-bars { display:flex; align-items:flex-end; gap:2px; height:70px; background:#fafafa; border-radius:4px; padding:0.3rem; }
-.err-col { flex:1; height:100%; display:flex; align-items:flex-end; }
-.err-fill { width:100%; background:#ef9a9a; border-radius:2px 2px 0 0; }
+h2 { margin-bottom: 1rem; }
+.controls { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
+.token-input { width: 300px; }
+.days-input { width: 140px; }
+.hint { font-size: 0.8rem; color: #e65100; }
+.hint-muted { font-size: 0.85rem; color: #888; margin-top: 0.8rem; }
+.stat-row { margin-top: 0.5rem; }
+.err-high { color: #c62828; }
+.quota-row { margin-top: 1.5rem; }
+.quota-row h4 { margin: 0 0 0.4rem; font-size: 0.9rem; }
+.quota-row p { margin: 0.4rem 0 0; font-size: 0.85rem; color: #666; }
+.chart-block { margin-top: 1.5rem; }
+.chart-block h4 { font-size: 0.9rem; margin-bottom: 0.5rem; }
+.legend { font-weight: normal; font-size: 0.75rem; color: #666; margin-left: 0.5rem; }
+.sw { display: inline-block; width: 10px; height: 3px; margin: 0 0.3rem 0 0.6rem; vertical-align: middle; }
+.sw.avg { background: #1565c0; }
+.sw.p95 { background: #ef6c00; }
+.chart { width: 100%; height: 120px; background: #fafafa; border-radius: 4px; }
+.chart .axis { stroke: #ddd; stroke-width: 1; }
+.chart .line { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.chart .line.avg { stroke: #1565c0; }
+.chart .line.p95 { stroke: #ef6c00; }
+.chart-scale { font-size: 0.75rem; color: #888; margin-top: 0.3rem; }
+.err-bars { display: flex; align-items: flex-end; gap: 2px; height: 70px; background: #fafafa; border-radius: 4px; padding: 0.3rem; }
+.err-col { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+.err-fill { width: 100%; background: #ef9a9a; border-radius: 2px 2px 0 0; }
 </style>

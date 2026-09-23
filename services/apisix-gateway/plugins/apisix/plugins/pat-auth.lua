@@ -21,11 +21,27 @@ local schema = {
         portal_backend_url = { type = "string" },
         internal_api_key = { type = "string", default = "" },
         neg_cache_ttl = { type = "integer", default = 30 },
-        -- HTTP method -> required scope name, for THIS route only
-        -- (the route's own `uri`/`uris` already pins the path).
+        -- HTTP method -> ordered list of {pattern, scope}, most-specific
+        -- pattern first. `pattern` is an anchored PCRE built from the
+        -- scope's path_pattern (portal-backend's _path_pattern_to_regex),
+        -- so a route whose `uri`/`uris` cover a whole resource tree (e.g.
+        -- `/capi/v1/vendors/*`) can still require different scopes for
+        -- `/vendors` vs `/vendors/{id}` under the same method.
         required_scope_map = {
             type = "object",
             minProperties = 1,
+            additionalProperties = {
+                type = "array",
+                minItems = 1,
+                items = {
+                    type = "object",
+                    properties = {
+                        pattern = { type = "string" },
+                        scope = { type = "string" },
+                    },
+                    required = { "pattern", "scope" },
+                },
+            },
         },
     },
     required = { "server_key", "portal_backend_url", "required_scope_map" },
@@ -235,14 +251,30 @@ function _M.rewrite(conf, ctx)
             "Client IP " .. client_ip .. " not in allowed CIDR")
     end
 
-    local required_scope = conf.required_scope_map[ctx.var.request_method]
+    -- `ctx.var.uri` is the normalized request path (no query string), which
+    -- is what path_pattern regexes are anchored against.
+    local method_patterns = conf.required_scope_map[ctx.var.request_method]
     local granted_scopes = cjson.decode(meta.scopes or "[]") or {}
     local has_scope = false
-    if required_scope then
-        for _, s in ipairs(granted_scopes) do
-            if s == required_scope then
-                has_scope = true
+    local required_scope = nil
+    if method_patterns then
+        for _, candidate in ipairs(method_patterns) do
+            if ngx.re.match(ctx.var.uri, candidate.pattern, "jo") then
+                required_scope = candidate.scope
                 break
+            end
+        end
+        -- The method is registered for this route but no scope pattern
+        -- matches this specific path: deny rather than silently falling
+        -- through, so an unlisted sub-resource path can't slip past scope
+        -- enforcement just because a sibling path_pattern happens to match
+        -- the method.
+        if required_scope then
+            for _, s in ipairs(granted_scopes) do
+                if s == required_scope then
+                    has_scope = true
+                    break
+                end
             end
         end
     else

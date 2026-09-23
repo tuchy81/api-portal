@@ -51,6 +51,22 @@ def _assert_can_modify(row: asyncpg.Record, user: UserClaims, action: str, api_i
         return cdp_error("CDP-4003", f"Cannot {action} another owner's API", f"/catalog/apis/{api_id}")
     return None
 
+
+def _assert_no_path_param_in_public_path(public_path: str):
+    """APISIX matches `public_path` as a literal prefix — `{id}`/`:id` style
+    segments there would never match a real request (e.g. .../vendors/123),
+    unlike in a scope's `path_pattern`, which pat-auth matches with regex.
+    Catch the common mistake at registration time instead of silently
+    publishing a route nothing can ever hit."""
+    if any(c in public_path for c in "{}:"):
+        return cdp_error(
+            "CDP-4002",
+            "publicPath must be a literal base path without {param}/:param segments; "
+            "put path parameters on each scope's pathPattern instead (e.g. /capi/v1/vendors/{id})",
+            "/catalog/apis",
+        )
+    return None
+
 @router.get("")
 async def list_apis(
     page: int = Query(1, ge=1),
@@ -112,6 +128,10 @@ async def create_api(
     if not any(r in user.roles for r in ["api-owner", "platform-admin"]):
         return cdp_error("CDP-4003", "Only API owners or admins can register APIs", f"/catalog/apis")
 
+    denied = _assert_no_path_param_in_public_path(req.publicPath)
+    if denied:
+        return denied
+
     # Pipeline (spec section 8): DB INSERT as DRAFT -> APISIX Admin API route
     # + plugin chain -> check it actually took -> PUBLISHED. If the gateway
     # check fails, we don't hard-fail the whole request (the catalog entry
@@ -138,7 +158,10 @@ async def create_api(
             )
 
     api_row = {"api_code": req.apiCode, "upstream_url": req.upstreamUrl, "public_path": req.publicPath}
-    scope_rows = [{"scope_name": s["scopeName"], "http_method": s["httpMethod"]} for s in req.scopes]
+    scope_rows = [
+        {"scope_name": s["scopeName"], "http_method": s["httpMethod"], "path_pattern": s["pathPattern"]}
+        for s in req.scopes
+    ]
 
     status = "DRAFT"
     warning = None
@@ -179,6 +202,11 @@ async def patch_api(
     denied = _assert_can_modify(row, user, "modify", api_id)
     if denied:
         return denied
+
+    if req.publicPath is not None:
+        denied = _assert_no_path_param_in_public_path(req.publicPath)
+        if denied:
+            return denied
 
     if all(v is None for v in (
         req.status, req.name, req.description, req.ownerDept, req.upstreamUrl,
@@ -226,7 +254,10 @@ async def patch_api(
                     await apisix_client.delete_route(row["api_code"], row["public_path"])
                 scopes = await db.fetch("SELECT * FROM cdp.api_scope WHERE api_id=$1", uuid.UUID(api_id))
                 api_row = {"api_code": row["api_code"], "upstream_url": new_upstream_url, "public_path": new_public_path}
-                scope_rows = [{"scope_name": s["scope_name"], "http_method": s["http_method"]} for s in scopes]
+                scope_rows = [
+                    {"scope_name": s["scope_name"], "http_method": s["http_method"], "path_pattern": s["path_pattern"]}
+                    for s in scopes
+                ]
                 await apisix_client.upsert_route(api_row, scope_rows)
                 if not await apisix_client.smoke_test(new_public_path):
                     raise RuntimeError("smoke test did not get the expected 401 from pat-auth")

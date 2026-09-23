@@ -23,6 +23,39 @@ def route_id_for(api_code: str, public_path: str) -> str:
     return f"capi-{code}-{version}"
 
 
+_PARAM_SEGMENT = re.compile(r"^(?:\{[^/{}]+\}|:[A-Za-z_][A-Za-z0-9_]*)$")
+
+
+def _path_pattern_to_regex(pattern: str) -> str:
+    """Convert a registered scope `path_pattern` into an anchored PCRE that
+    pat-auth matches the real request URI against. Supports:
+      - a plain literal path                 -> exact match only
+      - `{param}` / `:param` segments        -> match any single path segment
+      - a trailing `/**`                     -> also match any sub-path
+    e.g. "/capi/v1/vendors/{id}" -> "^/capi/v1/vendors/[^/]+$", which matches
+    "/capi/v1/vendors/123" but not "/capi/v1/vendors" or ".../123/orders"."""
+    pattern = pattern.rstrip("/")
+    is_wildcard = pattern.endswith("/**")
+    if is_wildcard:
+        pattern = pattern[: -len("/**")]
+    segments = [
+        "[^/]+" if _PARAM_SEGMENT.match(seg) else re.escape(seg)
+        for seg in pattern.split("/")
+    ]
+    body = "/".join(segments)
+    return f"^{body}(?:/.*)?$" if is_wildcard else f"^{body}$"
+
+
+def _pattern_specificity(pattern: str) -> tuple:
+    """Sort key so pat-auth tries the most specific patterns first: exact
+    literals, then `{param}` segments, then a trailing `/**` wildcard last —
+    otherwise a broad `/vendors/**` scope registered for the same method
+    could shadow a narrower `/vendors/{id}` one."""
+    is_wildcard = pattern.rstrip("/").endswith("/**")
+    param_count = len(re.findall(r"\{[^/{}]+\}|:[A-Za-z_][A-Za-z0-9_]*", pattern))
+    return (1 if is_wildcard else 0, param_count, -len(pattern))
+
+
 def _rewrite_pattern(public_path: str) -> str:
     """Only the `/capi/vN` version prefix gets swapped for the upstream's
     base path — everything after it (resource name, sub-paths, ids) is
@@ -40,17 +73,34 @@ def _build_route(api: dict, scopes: list[dict]) -> dict:
     parsed = urlparse(api["upstream_url"])
     upstream_path = parsed.path.rstrip("/")
 
-    required_scope_map = {}
+    # method -> list of {pattern, scope}, most-specific pattern first (spec
+    # section 6.2 note: two scopes can share a method but target different
+    # sub-resources via path_pattern, e.g. GET /vendors vs GET /vendors/{id}).
+    scopes_by_method: dict[str, list[dict]] = {}
     methods = set()
     for s in scopes:
         method = s["http_method"].upper()
-        required_scope_map[method] = s["scope_name"]
         methods.add(method)
+        scopes_by_method.setdefault(method, []).append(s)
     if not methods:
         # No scopes defined yet — still register the route so it 404s
         # cleanly instead of leaving a dangling public_path, but don't
         # grant any method through pat-auth.
         methods = {"GET"}
+    # A browser preflight (e.g. Swagger UI's "Try it out") sends an OPTIONS
+    # request before the real call whenever it carries an Authorization
+    # header. Without OPTIONS in the route's own method list, APISIX's route
+    # matching rejects it with 404 before the cors plugin (below) ever gets a
+    # chance to answer it — so this has to be added unconditionally.
+    methods.add("OPTIONS")
+
+    required_scope_map = {}
+    for method, method_scopes in scopes_by_method.items():
+        method_scopes.sort(key=lambda s: _pattern_specificity(s["path_pattern"]))
+        required_scope_map[method] = [
+            {"pattern": _path_pattern_to_regex(s["path_pattern"]), "scope": s["scope_name"]}
+            for s in method_scopes
+        ]
 
     common_redis = {
         "redis_host": settings.redis_host,
@@ -71,6 +121,11 @@ def _build_route(api: dict, scopes: list[dict]) -> dict:
             "retries": 1,
         },
         "plugins": {
+            # Dev-permissive defaults (allow_origins/methods/headers = "*").
+            # Runs at priority 4000, ahead of pat-auth (3010), so it answers
+            # a browser's CORS preflight (OPTIONS) before auth ever sees it —
+            # needed for the portal's embedded Swagger UI "Try it out".
+            "cors": {},
             "pat-auth": {
                 **common_redis,
                 "server_key": settings.server_key,

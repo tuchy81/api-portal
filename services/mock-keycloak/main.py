@@ -56,6 +56,12 @@ MOCK_USERS = {
         "asgn_cd": "ASG-ADMIN", "dept_cd": "DEPT-PLAT01", "job_tit_cd": "JOB-MANAGER",
         "offi_res_cd": "RES-SEOUL", "user_origin": "INTERNAL",
     },
+    "a453587": {
+        "username": "lee.changyob", "enabled": True, "roles": ["citizen-developer"],
+        "user_id": "a453587", "company": "HDHI", "org_cd": "ORG-IT",
+        "asgn_cd": "ASG-DEV", "dept_cd": "DEPT-IT01", "job_tit_cd": "JOB-STAFF",
+        "offi_res_cd": "RES-SEOUL", "user_origin": "INTERNAL",
+    },
 }
 
 # Claim keys copied from MOCK_USERS onto the token-exchange response's JWT

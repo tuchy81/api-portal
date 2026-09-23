@@ -1,0 +1,69 @@
+openapi: 3.0.3
+info:
+  title: Gateway Echo/Debug API
+  description: |
+    게이트웨이가 업스트림으로 전달하는 요청 헤더를 그대로 반환하는 디버그용 API
+    (api_code: `test`). 토큰 교환(JWT), `X-Citizen-PAT-Id`, `X-Request-Id` 등
+    게이트웨이가 주입하는 헤더가 실제로 업스트림까지 잘 전달되는지 확인하는
+    용도로만 쓰며, 실제 업무 데이터를 제공하지 않습니다.
+  version: "1.0.0"
+servers:
+  - url: http://localhost:9080
+    description: Citizen API Portal Gateway (APISIX, local dev)
+tags:
+  - name: bin
+    description: 요청 헤더 echo (디버그 전용)
+security:
+  - PatAuth: []
+paths:
+  /capi/v1/bin:
+    get:
+      operationId: dumpHeaders
+      summary: 업스트림에 전달된 요청 헤더 echo
+      tags: [bin]
+      x-required-scope: capi.test.read
+      responses:
+        "200":
+          description: 업스트림(mock-internal-gw)이 수신한 요청 헤더 전체
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: string }
+                example:
+                  authorization: "Bearer eyJhbGciOi..."
+                  x-citizen-pat-id: "abcdef012345"
+                  x-request-id: "b6b1..."
+                  x-forwarded-for: "203.0.113.5"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/QuotaExceeded" }
+components:
+  securitySchemes:
+    PatAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: "hdpat_<tokenId:12>_<secret:43>"
+      description: 포털에서 발급한 PAT. 오퍼레이션별 x-required-scope에 해당하는 스코프가 승인되어 있어야 합니다.
+  schemas:
+    Problem:
+      type: object
+      description: RFC 9457 problem+json — 게이트웨이(pat-auth/pat-quota)가 발생시키는 에러 포맷.
+      properties:
+        type: { type: string, example: "https://cdp-portal.hd.com/errors/CDP-1002" }
+        title: { type: string, example: "Missing or invalid Authorization header" }
+        status: { type: integer, example: 401 }
+        code: { type: string, example: "CDP-1002" }
+        detail: { type: string }
+        instance: { type: string }
+        traceId: { type: string }
+  responses:
+    Unauthorized:
+      description: PAT 누락/무효/만료 (CDP-1001/1002) 또는 인가 서비스 장애 (CDP-2001)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    QuotaExceeded:
+      description: 호출 쿼터/레이트 초과 (CDP-1004)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }

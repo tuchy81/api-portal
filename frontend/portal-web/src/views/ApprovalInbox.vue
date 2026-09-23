@@ -1,46 +1,49 @@
 <template>
   <div>
     <h2>결재함 (API 오너)</h2>
-    <p class="notice">
+    <el-alert type="info" :closable="false" show-icon class="notice">
       부여 Scope는 서버가 <strong>신청 Scope ∩ 카탈로그 정의</strong>로 계산합니다. 결재자가 임의로 수정할 수 없습니다.
-    </p>
-    <div class="card">
-      <table>
-        <thead>
-          <tr>
-            <th>신청 ID</th><th>API</th><th>신청자</th><th>목적</th>
-            <th>신청 Scope</th><th>상태</th><th>작업</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="app in apps" :key="app.app_id">
-            <td><code>{{ app.app_id?.slice(0,8) }}...</code></td>
-            <td>{{ app.api_name }}</td>
-            <td>{{ app.user_sub }}</td>
-            <td>{{ app.purpose?.slice(0,40) }}...</td>
-            <td>
-              <span v-for="s in (app.requested_scopes || [])" :key="s" class="scope-chip">{{ s }}</span>
-              <span v-if="!(app.requested_scopes || []).length" class="muted">-</span>
-            </td>
-            <td><span :class="`badge badge-${app.status?.toLowerCase()}`">{{ app.status }}</span></td>
-            <td v-if="app.status === 'PENDING'">
-              <button class="btn btn-success" @click="approve(app)" :disabled="busy">승인</button>
-              <button class="btn btn-danger" style="margin-left:0.3rem" @click="reject(app)" :disabled="busy">반려</button>
-            </td>
-            <td v-else>
-              <span v-for="s in (app.granted_scopes || [])" :key="s" class="scope-chip granted">{{ s }}</span>
-              <span v-if="!(app.granted_scopes || []).length" class="muted">-</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-if="!apps.length" class="muted">결재 대기 중인 신청이 없습니다.</p>
-    </div>
+    </el-alert>
+    <el-card shadow="never">
+      <el-table :data="apps" style="width: 100%">
+        <el-table-column label="신청 ID" width="110">
+          <template #default="{ row }"><code>{{ row.app_id?.slice(0, 8) }}...</code></template>
+        </el-table-column>
+        <el-table-column prop="api_name" label="API" />
+        <el-table-column prop="user_sub" label="신청자" width="110" />
+        <el-table-column label="목적">
+          <template #default="{ row }">{{ row.purpose?.slice(0, 40) }}...</template>
+        </el-table-column>
+        <el-table-column label="신청 Scope" min-width="180">
+          <template #default="{ row }">
+            <el-tag v-for="s in row.requested_scopes || []" :key="s" size="small" class="scope-chip">{{ s }}</el-tag>
+            <span v-if="!(row.requested_scopes || []).length" class="muted">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="상태" width="110">
+          <template #default="{ row }"><el-tag :type="statusTagType(row.status)">{{ row.status }}</el-tag></template>
+        </el-table-column>
+        <el-table-column label="작업" width="160">
+          <template #default="{ row }">
+            <template v-if="row.status === 'PENDING'">
+              <el-button type="success" size="small" :disabled="busy" @click="approve(row)">승인</el-button>
+              <el-button type="danger" size="small" :disabled="busy" @click="reject(row)">반려</el-button>
+            </template>
+            <template v-else>
+              <el-tag v-for="s in row.granted_scopes || []" :key="s" size="small" type="success" class="scope-chip">{{ s }}</el-tag>
+              <span v-if="!(row.granted_scopes || []).length" class="muted">-</span>
+            </template>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!apps.length" description="결재 대기 중인 신청이 없습니다." />
+    </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api/axios'
 
 const apps = ref<any[]>([])
@@ -53,29 +56,50 @@ async function reload() {
 
 onMounted(reload)
 
+function statusTagType(status: string) {
+  const map: Record<string, string> = { APPROVED: 'success', PENDING: 'warning', REJECTED: 'danger', EXPIRED: 'info', WITHDRAWN: 'info' }
+  return map[status] || 'info'
+}
+
 async function approve(app: any) {
   const scopes = (app.requested_scopes || []).join(', ') || '(없음)'
-  if (!confirm(`신청 ${app.app_id?.slice(0,8)}을 승인하시겠습니까?\n\n신청 Scope: ${scopes}\n실제 부여 Scope는 카탈로그 정의와 교집합으로 서버가 결정합니다.`)) return
+  try {
+    await ElMessageBox.confirm(
+      `신청 Scope: ${scopes}\n실제 부여 Scope는 카탈로그 정의와 교집합으로 서버가 결정합니다.`,
+      `신청 ${app.app_id?.slice(0, 8)}을 승인하시겠습니까?`,
+      { confirmButtonText: '승인', cancelButtonText: '취소' },
+    )
+  } catch {
+    return
+  }
   busy.value = true
   try {
     await api.patch(`/applications/${app.app_id}`, { action: 'APPROVE' })
     await reload()
   } catch (e: any) {
-    alert(e.response?.data?.detail || '승인 실패')
+    ElMessage.error(e.response?.data?.detail || '승인 실패')
   } finally {
     busy.value = false
   }
 }
 
 async function reject(app: any) {
-  const comment = prompt('반려 사유:')
-  if (comment === null) return
+  let comment: string
+  try {
+    const { value } = await ElMessageBox.prompt('반려 사유를 입력하세요.', '반려', {
+      confirmButtonText: '반려',
+      cancelButtonText: '취소',
+    })
+    comment = value
+  } catch {
+    return
+  }
   busy.value = true
   try {
     await api.patch(`/applications/${app.app_id}`, { action: 'REJECT', reviewComment: comment })
     await reload()
   } catch (e: any) {
-    alert(e.response?.data?.detail || '반려 실패')
+    ElMessage.error(e.response?.data?.detail || '반려 실패')
   } finally {
     busy.value = false
   }
@@ -83,9 +107,8 @@ async function reject(app: any) {
 </script>
 
 <style scoped>
-h2 { margin-bottom:0.8rem; }
-.notice { font-size:0.85rem; color:#1565c0; background:#e3f2fd; border:1px solid #90caf9; border-radius:6px; padding:0.6rem 0.9rem; margin-bottom:1rem; }
-.scope-chip { display:inline-block; background:#eceff1; border-radius:10px; padding:0.15rem 0.55rem; font-size:0.75rem; margin:0 0.2rem 0.2rem 0; font-family:monospace; }
-.scope-chip.granted { background:#e8f5e9; color:#2e7d32; }
-.muted { color:#888; font-size:0.85rem; }
+h2 { margin-bottom: 0.8rem; }
+.notice { margin-bottom: 1rem; }
+.scope-chip { margin: 0 0.2rem 0.2rem 0; font-family: monospace; }
+.muted { color: #888; font-size: 0.85rem; }
 </style>

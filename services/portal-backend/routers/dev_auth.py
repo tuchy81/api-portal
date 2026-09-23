@@ -10,6 +10,7 @@ MOCK_USERS = {
     "u-test-001": {"username": "hong.gildong", "roles": ["citizen-developer", "mdm-reader"]},
     "u-test-002": {"username": "api.owner", "roles": ["api-owner", "citizen-developer"]},
     "u-admin-001": {"username": "platform.admin", "roles": ["platform-admin", "citizen-developer"]},
+    "a453587": {"username": "lee.changyob", "roles": ["citizen-developer"]},
 }
 
 

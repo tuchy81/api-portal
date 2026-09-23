@@ -1,31 +1,33 @@
 <template>
   <div class="login-page">
-    <div class="login-card">
+    <el-card class="login-card" shadow="always">
       <div class="brand">🏢 시민개발자 API 포털</div>
       <h2>개발 환경 로그인</h2>
-      <p class="notice">⚠️ Mock 모드 — 실제 Keycloak 없이 시뮬레이션합니다.</p>
+      <el-alert type="warning" :closable="false" show-icon class="notice">
+        Mock 모드 — 실제 Keycloak 없이 시뮬레이션합니다.
+      </el-alert>
 
-      <div class="user-list">
-        <label
+      <el-radio-group v-model="selectedId" class="user-list">
+        <el-radio
           v-for="u in users"
           :key="u.id"
+          :value="u.id"
+          border
           class="user-item"
-          :class="{ selected: selectedId === u.id }"
         >
-          <input type="radio" v-model="selectedId" :value="u.id" />
           <div class="user-info">
             <span class="username">{{ u.username }}</span>
             <span class="roles">{{ u.roles.join(', ') }}</span>
           </div>
-        </label>
-      </div>
+        </el-radio>
+      </el-radio-group>
 
-      <p v-if="error" class="error">{{ error }}</p>
+      <el-alert v-if="error" type="error" :closable="false" show-icon class="error">{{ error }}</el-alert>
 
-      <button class="btn btn-primary" :disabled="!selectedId || loading" @click="login">
-        {{ loading ? '로그인 중...' : '로그인' }}
-      </button>
-    </div>
+      <el-button type="primary" size="large" class="submit-btn" :disabled="!selectedId" :loading="loading" @click="login">
+        로그인
+      </el-button>
+    </el-card>
   </div>
 </template>
 
@@ -78,91 +80,21 @@ async function login() {
   justify-content: center;
   background: #f5f6fa;
 }
-.login-card {
-  background: white;
-  border-radius: 12px;
-  padding: 2.5rem;
-  width: 420px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.12);
-}
-.brand {
-  font-size: 1.1rem;
-  font-weight: bold;
-  color: #1a1a2e;
-  margin-bottom: 0.5rem;
-}
-h2 {
-  margin-bottom: 0.5rem;
-  font-size: 1.4rem;
-}
-.notice {
-  font-size: 0.82rem;
-  color: #e65100;
-  background: #fff3e0;
-  border: 1px solid #ffcc80;
-  border-radius: 4px;
-  padding: 0.5rem 0.8rem;
-  margin-bottom: 1.5rem;
-}
-.user-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  margin-bottom: 1.2rem;
-}
-.user-item {
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
-  border: 2px solid #e0e0e0;
-  border-radius: 8px;
-  padding: 0.8rem 1rem;
-  cursor: pointer;
-  transition: border-color 0.15s;
-}
-.user-item.selected {
-  border-color: #1565c0;
-  background: #e3f2fd;
-}
-.user-item input[type="radio"] {
-  accent-color: #1565c0;
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-}
-.user-info {
-  display: flex;
-  flex-direction: column;
-}
-.username {
-  font-weight: 600;
-  font-size: 0.95rem;
-}
-.roles {
-  font-size: 0.78rem;
-  color: #666;
-  margin-top: 0.15rem;
-}
-.btn {
-  width: 100%;
-  padding: 0.7rem;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 1rem;
-  font-weight: 600;
-}
-.btn-primary {
-  background: #1565c0;
-  color: white;
-}
-.btn-primary:disabled {
-  background: #90caf9;
-  cursor: not-allowed;
-}
-.error {
-  color: #c62828;
-  font-size: 0.85rem;
-  margin-bottom: 0.8rem;
-}
+.login-card { width: 440px; }
+.brand { font-size: 1.05rem; font-weight: bold; color: #1a1a2e; margin-bottom: 0.5rem; }
+h2 { margin: 0 0 1rem; font-size: 1.35rem; }
+.notice { margin-bottom: 1.2rem; }
+.user-list { display: flex; flex-direction: column; flex-wrap: nowrap; gap: 0.6rem; width: 100%; margin-bottom: 1.2rem; }
+/* Element Plus's bordered .el-radio carries a default margin-right:30px
+   (meant for horizontal layout) that only its own :last-child rule zeroes
+   out — combined with .el-radio-group's align-items:center, that asymmetry
+   centers every non-last card 15px left of the last one. Zero it on all of
+   them so every card aligns flush at the same left edge. */
+.user-item { height: auto; width: 100%; margin: 0 !important; padding: 0.7rem 1rem; }
+.user-item :deep(.el-radio__label) { width: 100%; }
+.user-info { display: flex; flex-direction: column; }
+.username { font-weight: 600; font-size: 0.95rem; }
+.roles { font-size: 0.78rem; color: #888; margin-top: 0.15rem; }
+.error { margin-bottom: 1rem; }
+.submit-btn { width: 100%; }
 </style>

@@ -66,7 +66,7 @@ async def resync_gateway_routes():
     for row in rows:
         api_row = {"api_code": row["api_code"], "upstream_url": row["upstream_url"], "public_path": row["public_path"]}
         scope_rows = [
-            {"scope_name": s["scope_name"], "http_method": s["http_method"]}
+            {"scope_name": s["scope_name"], "http_method": s["http_method"], "path_pattern": s["path_pattern"]}
             for s in scopes_by_api[row["api_id"]]
         ]
         for attempt in range(10):

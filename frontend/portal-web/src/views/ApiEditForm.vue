@@ -1,85 +1,78 @@
 <template>
   <div>
     <h2>API 편집</h2>
-    <div v-if="loading" class="card">로딩 중...</div>
-    <div v-else class="card">
-      <form @submit.prevent="submit">
-        <section>
-          <h3>기본 정보</h3>
-          <label>API 코드
-            <input :value="apiCode" class="input" disabled />
-          </label>
-          <label>API 이름 <span class="required">*</span>
-            <input v-model="form.name" class="input" required />
-          </label>
-          <label>설명
-            <textarea v-model="form.description" class="input" rows="3"></textarea>
-          </label>
-          <label>담당 부서 <span class="required">*</span>
-            <input v-model="form.ownerDept" class="input" required />
-          </label>
-          <label>상태
-            <select v-model="form.status" class="input">
-              <option value="DRAFT">DRAFT</option>
-              <option value="PUBLISHED">PUBLISHED</option>
-              <option value="DEPRECATED">DEPRECATED</option>
-              <option value="RETIRED">RETIRED</option>
-            </select>
-          </label>
-        </section>
+    <el-card v-if="loading" shadow="never" v-loading="true" class="loading-box" />
+    <el-card v-else shadow="never">
+      <el-form :model="form" label-position="top" @submit.prevent="submit">
+        <el-divider content-position="left">기본 정보</el-divider>
+        <el-form-item label="API 코드">
+          <el-input :model-value="apiCode" disabled />
+        </el-form-item>
+        <el-form-item label="API 이름" required>
+          <el-input v-model="form.name" />
+        </el-form-item>
+        <el-form-item label="설명">
+          <el-input v-model="form.description" type="textarea" :rows="3" />
+        </el-form-item>
+        <el-form-item label="담당 부서" required>
+          <el-input v-model="form.ownerDept" />
+        </el-form-item>
+        <el-form-item label="상태">
+          <el-select v-model="form.status">
+            <el-option v-for="s in STATUSES" :key="s" :label="s" :value="s" />
+          </el-select>
+        </el-form-item>
 
-        <section>
-          <h3>경로 설정</h3>
-          <p class="hint">공개 경로를 바꾸면 게이트웨이 라우트가 새 경로로 재생성됩니다(기존 라우트는 제거됨).</p>
-          <label>공개 경로 (Public Path) <span class="required">*</span>
-            <input v-model="form.publicPath" class="input" required />
-          </label>
-          <label>업스트림 URL <span class="required">*</span>
-            <input v-model="form.upstreamUrl" class="input" required />
-          </label>
-        </section>
+        <el-divider content-position="left">경로 설정</el-divider>
+        <p class="hint">공개 경로를 바꾸면 게이트웨이 라우트가 새 경로로 재생성됩니다(기존 라우트는 제거됨).</p>
+        <el-form-item label="공개 경로 (Public Path)" required>
+          <el-input v-model="form.publicPath" />
+        </el-form-item>
+        <el-form-item label="업스트림 URL" required>
+          <el-input v-model="form.upstreamUrl" />
+        </el-form-item>
 
-        <section>
-          <h3>OpenAPI 스펙</h3>
-          <p v-if="hasExistingSpec && !openapiSpec" class="hint">기존에 등록된 스펙이 있습니다. 새 파일을 올리면 교체됩니다.</p>
-          <input type="file" accept="application/json,.json" class="input" @change="onSpecFile" />
-          <p v-if="specError" class="spec-error">⚠️ {{ specError }}</p>
-          <p v-else-if="specSummary" class="spec-ok">
-            ✅ {{ specSummary.title }} (v{{ specSummary.version }}) — 경로 {{ specSummary.pathCount }}개 인식됨
-          </p>
-        </section>
+        <el-divider content-position="left">OpenAPI 스펙</el-divider>
+        <p v-if="hasExistingSpec && !openapiSpec" class="hint">기존에 등록된 스펙이 있습니다. 새 파일을 올리면 교체됩니다.</p>
+        <el-form-item>
+          <input type="file" accept="application/json,.json" @change="onSpecFile" />
+        </el-form-item>
+        <el-alert v-if="specError" type="error" :closable="false" show-icon>{{ specError }}</el-alert>
+        <el-alert v-else-if="specSummary" type="success" :closable="false" show-icon>
+          {{ specSummary.title }} (v{{ specSummary.version }}) — 경로 {{ specSummary.pathCount }}개 인식됨
+        </el-alert>
 
-        <section>
-          <h3>스코프 <span class="required">*</span></h3>
-          <p class="hint">저장하면 아래 목록으로 전체 교체됩니다.</p>
-          <div v-for="(scope, i) in form.scopes" :key="i" class="scope-row">
-            <input v-model="scope.scopeName" class="input scope-name" placeholder="스코프 (예: capi.vendor.read)" required />
-            <select v-model="scope.httpMethod" class="input scope-method">
-              <option>GET</option><option>POST</option><option>PUT</option>
-              <option>PATCH</option><option>DELETE</option>
-            </select>
-            <input v-model="scope.pathPattern" class="input scope-path" placeholder="경로 패턴 (예: /capi/v1/vendors)" required />
-            <input v-model="scope.description" class="input scope-desc" placeholder="설명" />
-            <button type="button" class="btn-remove" @click="removeScope(i)" :disabled="form.scopes.length === 1">✕</button>
-          </div>
-          <button type="button" class="btn btn-secondary" @click="addScope">+ 스코프 추가</button>
-        </section>
+        <el-divider content-position="left">스코프 <span class="required">*</span></el-divider>
+        <p class="hint">저장하면 아래 목록으로 전체 교체됩니다.</p>
+        <div v-for="(scope, i) in form.scopes" :key="i" class="scope-row">
+          <el-input v-model="scope.scopeName" placeholder="스코프 (예: capi.vendor.read)" class="scope-name" />
+          <el-select v-model="scope.httpMethod" class="scope-method">
+            <el-option v-for="m in HTTP_METHODS" :key="m" :label="m" :value="m" />
+          </el-select>
+          <el-input v-model="scope.pathPattern" placeholder="경로 패턴 (예: /capi/v1/vendors)" class="scope-path" />
+          <el-input v-model="scope.description" placeholder="설명" class="scope-desc" />
+          <el-button :icon="Close" circle size="small" :disabled="form.scopes.length === 1" @click="removeScope(i)" />
+        </div>
+        <el-button :icon="Plus" @click="addScope">스코프 추가</el-button>
 
         <div class="form-actions">
-          <button type="submit" class="btn btn-primary" :disabled="submitting">
-            {{ submitting ? '저장 중...' : '저장' }}
-          </button>
-          <button type="button" class="btn" @click="$router.push(`/cdp/catalog/${apiId}`)" style="margin-left:0.5rem">취소</button>
+          <el-button type="primary" native-type="submit" :loading="submitting" @click="submit">저장</el-button>
+          <el-button @click="router.push(`/cdp/catalog/${apiId}`)">취소</el-button>
         </div>
-      </form>
-    </div>
+      </el-form>
+    </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { Plus, Close } from '@element-plus/icons-vue'
 import api from '../api/axios'
+
+const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+const STATUSES = ['DRAFT', 'PUBLISHED', 'DEPRECATED', 'RETIRED']
 
 const route = useRoute()
 const router = useRouter()
@@ -126,7 +119,7 @@ onMounted(async () => {
         : [{ scopeName: '', httpMethod: 'GET', pathPattern: '', description: '' }],
     }
   } catch (e: any) {
-    alert(e.response?.data?.detail?.message || 'API 정보를 불러오지 못했습니다.')
+    ElMessage.error(e.response?.data?.detail?.message || 'API 정보를 불러오지 못했습니다.')
     router.push('/cdp/catalog')
   } finally {
     loading.value = false
@@ -170,7 +163,7 @@ function removeScope(i: number) {
 
 async function submit() {
   if (specError.value) {
-    alert('OpenAPI 스펙 파일을 확인하세요: ' + specError.value)
+    ElMessage.error('OpenAPI 스펙 파일을 확인하세요: ' + specError.value)
     return
   }
   submitting.value = true
@@ -186,13 +179,13 @@ async function submit() {
       ...(openapiSpec.value ? { openapiSpec: openapiSpec.value } : {}),
     })
     if (data.warning) {
-      alert(`저장되었지만 경고가 있습니다: ${data.warning}`)
+      ElMessage.warning(`저장되었지만 경고가 있습니다: ${data.warning}`)
     } else {
-      alert('저장되었습니다.')
+      ElMessage.success('저장되었습니다.')
     }
     router.push(`/cdp/catalog/${apiId}`)
   } catch (e: any) {
-    alert(e.response?.data?.detail || 'API 저장 실패')
+    ElMessage.error(e.response?.data?.detail || 'API 저장 실패')
   } finally {
     submitting.value = false
   }
@@ -201,23 +194,13 @@ async function submit() {
 
 <style scoped>
 h2 { margin-bottom: 1.5rem; }
-section { margin-bottom: 2rem; }
-h3 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; padding-bottom: 0.4rem; border-bottom: 1px solid #eee; }
-label { display: block; margin-bottom: 0.9rem; font-size: 0.9rem; color: #333; }
-.input { display: block; width: 100%; margin-top: 0.3rem; padding: 0.45rem 0.8rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; }
-.input:disabled { background: #f5f5f5; color: #888; }
-textarea.input { resize: vertical; }
 .required { color: #c62828; }
-.hint { font-size: 0.8rem; color: #666; margin-bottom: 0.8rem; }
-.spec-error { font-size: 0.85rem; color: #c62828; margin-top: 0.6rem; }
-.spec-ok { font-size: 0.85rem; color: #2e7d32; margin-top: 0.6rem; }
+.hint { font-size: 0.8rem; color: #666; margin: 0 0 0.8rem; }
 .scope-row { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; align-items: center; }
 .scope-name { flex: 2; }
-.scope-method { flex: 0 0 90px; }
+.scope-method { flex: 0 0 100px; }
 .scope-path { flex: 2; }
 .scope-desc { flex: 2; }
-.btn-remove { flex: 0 0 28px; background: #ffebee; border: 1px solid #ef9a9a; border-radius: 4px; cursor: pointer; color: #c62828; font-size: 0.8rem; padding: 0.3rem; }
-.btn-remove:disabled { opacity: 0.3; cursor: default; }
-.btn-secondary { background: #e3f2fd; border: 1px solid #90caf9; color: #1565c0; padding: 0.4rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; margin-top: 0.3rem; }
-.form-actions { padding-top: 1rem; border-top: 1px solid #eee; }
+.form-actions { padding-top: 1rem; margin-top: 1rem; border-top: 1px solid #eee; display: flex; gap: 0.5rem; }
+.loading-box { min-height: 200px; }
 </style>
