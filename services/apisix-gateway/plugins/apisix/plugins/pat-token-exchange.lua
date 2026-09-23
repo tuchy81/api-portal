@@ -34,12 +34,15 @@ function _M.check_schema(conf)
 end
 
 local function scope_hash(scopes)
+    -- 16 hex chars = 64 bits. Must stay in lockstep with TXS's cache._scope_hash
+    -- (Python) so the gateway reads the same cdp:jwt:{tokenId}:{scopeHash} the
+    -- exchanger wrote.
     local copy = {}
     for i, s in ipairs(scopes) do
         copy[i] = s
     end
     table.sort(copy)
-    return common.sha256_hex(table.concat(copy, " ")):sub(1, 8)
+    return common.sha256_hex(table.concat(copy, " ")):sub(1, 16)
 end
 
 -- Fixed claim -> upstream header mapping (HR/org context internal APIs

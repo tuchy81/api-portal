@@ -95,11 +95,11 @@ async def issue_pat(
 
     async with db.transaction():
         await db.execute(
-            """INSERT INTO cdp.pat (token_id, app_id, user_sub, token_name, token_hash, scopes,
+            """INSERT INTO cdp.pat (token_id, app_id, user_sub, token_name, token_hash, token_hmac, scopes,
                                     allowed_cidr, issued_at, expires_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
             token_id, uuid.UUID(req.appId), user.sub, req.tokenName,
-            token_hash, granted_scopes, req.allowedCidr, now, expires_at
+            token_hash, hmac_val, granted_scopes, req.allowedCidr, now, expires_at
         )
         await db.execute(
             """INSERT INTO cdp.quota_policy (token_id, rate_limit_tps, burst, daily_quota, monthly_quota)

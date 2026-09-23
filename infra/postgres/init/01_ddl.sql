@@ -53,12 +53,18 @@ CREATE INDEX idx_app_user   ON cdp.application(user_sub, status);
 CREATE INDEX idx_app_status ON cdp.application(status, created_at DESC);
 
 -- PAT
+-- token_hash: SHA256(secret) hex (64 chars). See services/portal-backend/pat_utils.py
+--   for why plain SHA256 is safe here (256bit CSPRNG secret, no dictionary space).
+-- token_hmac: HMAC-SHA256(server_key, secret) hex (64 chars). Kept in the DB so
+--   /internal/pat/{token_id} can return it on a Redis cache miss — pat-auth.lua
+--   verifies against this value even after eviction. Never expose to clients.
 CREATE TABLE cdp.pat (
     token_id     VARCHAR(12)  PRIMARY KEY,
     app_id       UUID         NOT NULL REFERENCES cdp.application(app_id),
     user_sub     VARCHAR(64)  NOT NULL,
     token_name   VARCHAR(100) NOT NULL,
-    token_hash   VARCHAR(255) NOT NULL,
+    token_hash   VARCHAR(64)  NOT NULL,
+    token_hmac   VARCHAR(64)  NOT NULL,
     scopes       TEXT[]       NOT NULL,
     status       VARCHAR(20)  NOT NULL DEFAULT 'ACTIVE'
                  CHECK (status IN ('ACTIVE','REVOKED','EXPIRED','INACTIVE')),

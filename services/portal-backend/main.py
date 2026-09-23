@@ -11,6 +11,7 @@ from config import settings
 from database import get_pool
 import apisix_client
 import batch
+import audit_consumer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("portal")
@@ -80,16 +81,30 @@ async def resync_gateway_routes():
                     await asyncio.sleep(2)
     logger.info(f"Gateway route resync attempted for {len(rows)} published APIs")
 
+_audit_consumer_task: asyncio.Task | None = None
+
+
 @app.on_event("startup")
 async def startup():
+    global _audit_consumer_task
     await get_pool()
     batch.start_scheduler()
     asyncio.create_task(resync_gateway_routes())
+    # pat-audit.lua XADDs security events to cdp:audit:security; this task
+    # drains that stream into cdp.audit_log so worker restarts / portal HTTP
+    # /internal/audit downtime don't lose those events.
+    _audit_consumer_task = asyncio.create_task(audit_consumer.run_consumer())
     logger.info("Portal Backend started")
 
 @app.on_event("shutdown")
 async def shutdown():
     batch.stop_scheduler()
+    if _audit_consumer_task and not _audit_consumer_task.done():
+        _audit_consumer_task.cancel()
+        try:
+            await _audit_consumer_task
+        except asyncio.CancelledError:
+            pass
 
 @app.get("/health")
 def health():

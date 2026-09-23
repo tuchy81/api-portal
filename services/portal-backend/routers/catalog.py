@@ -10,9 +10,25 @@ from auth import get_current_user, UserClaims
 from error_handlers import cdp_error
 from config import settings
 import apisix_client
+import redis_client as rc
 
 logger = logging.getLogger("portal.catalog")
 router = APIRouter(prefix="/catalog/apis", tags=["catalog"])
+
+
+async def _tokens_for_api(db: asyncpg.Connection, api_id: uuid.UUID) -> list[str]:
+    """Every active PAT whose application belongs to this API. The scope
+    change / retire flow uses this to invalidate cached JWTs for tokens whose
+    granted_scopes may now decide differently — the PAT itself is untouched,
+    only the (up to 240s stale) JWT cache is dropped so the next call runs a
+    fresh Token Exchange."""
+    rows = await db.fetch(
+        """SELECT p.token_id FROM cdp.pat p
+           JOIN cdp.application a ON p.app_id = a.app_id
+           WHERE a.api_id = $1 AND p.status = 'ACTIVE'""",
+        api_id,
+    )
+    return [r["token_id"] for r in rows]
 
 class ApiCreateRequest(BaseModel):
     apiCode: str
@@ -298,6 +314,22 @@ async def patch_api(
             f"UPDATE cdp.api_catalog SET {', '.join(updates)} WHERE api_id=${idx}",
             *values
         )
+
+    # Any scope/publication/routing change may make previously-issued JWTs
+    # obsolete (a scope removed from the API is still baked into a 240s-TTL
+    # cached JWT until it expires). Flush JWT cache only — PATs stay valid;
+    # next call goes back through Token Exchange with the current scope set.
+    if route_relevant_changed:
+        token_ids = await _tokens_for_api(db, uuid.UUID(api_id))
+        if token_ids:
+            try:
+                dropped = rc.invalidate_jwt_cache(rc.get_redis(), token_ids)
+                logger.info(
+                    f"invalidated {dropped} JWT cache entries across {len(token_ids)} "
+                    f"PATs after catalog change on {row['api_code']}"
+                )
+            except Exception as e:
+                logger.warning(f"JWT cache invalidation failed for {row['api_code']}: {e}")
 
     result = {"apiId": api_id, "updated": True, "status": final_status}
     if warning:

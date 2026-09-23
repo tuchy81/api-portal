@@ -54,9 +54,10 @@ async def token_exchange(req: ExchangeRequest, request: Request):
 
     # Circuit breaker check
     if cb_module.is_circuit_open(r):
-        # Check if there's a cached JWT we can still use
-        import hashlib
-        sh = hashlib.sha256(" ".join(sorted(req.scopes)).encode()).hexdigest()[:8]
+        # Same scope hash as jwt_cache._scope_hash — must stay in lockstep
+        # (16 hex chars = 64 bits) so we look up the same cache key writers
+        # populated.
+        sh = jwt_cache._scope_hash(req.scopes)
         cached_jwt = r.get(f"cdp:jwt:{req.tokenId}:{sh}")
         if cached_jwt:
             from keycloak_client import _extract_jti

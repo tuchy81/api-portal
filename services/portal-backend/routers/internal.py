@@ -43,7 +43,14 @@ async def get_pat_meta(
     token_id: str,
     db: asyncpg.Connection = Depends(get_db),
 ):
-    """Gateway fallback: return PAT metadata for cache population."""
+    """Gateway fallback for a Redis cache miss.
+
+    Returns the same HMAC value the gateway would have found in Redis, so
+    pat-auth.lua's Fail-Closed check (secret HMAC == meta.hash) still runs.
+    Legacy rows without token_hmac cannot be verified this way and are
+    treated as invalid — Redis remains the source of truth for the HMAC on
+    the hot path, this endpoint just rehydrates it after eviction.
+    """
     pat = await db.fetchrow(
         """SELECT p.*, q.rate_limit_tps, q.burst, q.daily_quota, q.monthly_quota
            FROM cdp.pat p LEFT JOIN cdp.quota_policy q ON p.token_id=q.token_id
@@ -56,6 +63,12 @@ async def get_pat_meta(
     if pat["status"] != "ACTIVE":
         raise HTTPException(401, detail={"code": "CDP-1001", "message": "PAT is not active"})
 
+    # A row without token_hmac predates the P0 fix and can't be verified by
+    # the gateway on cache miss. Reject rather than silently letting an
+    # attacker through — issuers must re-issue such PATs.
+    if not pat["token_hmac"]:
+        raise HTTPException(401, detail={"code": "CDP-1001", "message": "PAT missing verification material; re-issue required"})
+
     # Re-cache in Redis
     r = rc.get_redis()
     now = datetime.now(timezone.utc)
@@ -66,11 +79,7 @@ async def get_pat_meta(
 
     if ttl > 0:
         rc.cache_pat_meta(r, token_id, {
-            "hmac": pat["token_hash"],  # Note: DB stores a SHA256 hash, but gateway uses HMAC
-            # For gateway to work, we need to store HMAC — but it's not stored in DB
-            # The gateway should NOT use this fallback for HMAC verification in production
-            # (HMAC is stored only during initial issuance in Redis)
-            # This fallback is for metadata only; HMAC comparison will fail if Redis was cleared
+            "hmac": pat["token_hmac"],
             "sub": pat["user_sub"],
             "scopes": list(pat["scopes"]) if pat["scopes"] else [],
             "status": pat["status"],
@@ -85,6 +94,7 @@ async def get_pat_meta(
     return {
         "tokenId": token_id,
         "sub": pat["user_sub"],
+        "hmac": pat["token_hmac"],
         "scopes": list(pat["scopes"]) if pat["scopes"] else [],
         "status": pat["status"],
         "cidr": list(pat["allowed_cidr"]) if pat["allowed_cidr"] else [],
@@ -96,6 +106,62 @@ async def get_pat_meta(
             "monthlyQuota": pat["monthly_quota"] or 100000,
         }
     }
+
+class UserLifecycleEvent(BaseModel):
+    userSub: str
+    eventType: str  # e.g. DISABLE, DELETE, LOGOUT
+    reason: Optional[str] = None
+
+
+@router.post("/user-events", status_code=202)
+async def receive_user_event(
+    event: UserLifecycleEvent,
+    db: asyncpg.Connection = Depends(get_db),
+):
+    """Keycloak lifecycle webhook. DISABLE/DELETE revokes every ACTIVE PAT
+    for the user and drops both the PAT and JWT caches immediately, so the
+    next gateway request 401s instead of riding on a valid-but-stale
+    cached JWT until its 240s TTL expires. LOGOUT is a session-scoped event
+    on Keycloak's side and only needs the JWT cache dropped (PATs continue).
+    Idempotent — repeat calls are no-ops if nothing is left to revoke."""
+    event_type = (event.eventType or "").upper()
+    if event_type not in {"DISABLE", "DELETE", "LOGOUT"}:
+        raise HTTPException(400, detail={"code": "CDP-4001", "message": f"Unsupported eventType: {event.eventType}"})
+
+    r = rc.get_redis()
+
+    if event_type in {"DISABLE", "DELETE"}:
+        rows = await db.fetch(
+            "SELECT token_id FROM cdp.pat WHERE user_sub=$1 AND status='ACTIVE'",
+            event.userSub,
+        )
+        token_ids = [row["token_id"] for row in rows]
+        if token_ids:
+            await db.execute(
+                """UPDATE cdp.pat SET status='REVOKED', revoked_at=now(),
+                                       revoked_by='keycloak-webhook',
+                                       revoke_reason=$2
+                   WHERE user_sub=$1 AND status='ACTIVE'""",
+                event.userSub, f"user {event_type.lower()}: {event.reason or 'no reason given'}",
+            )
+            for tid in token_ids:
+                rc.invalidate_pat(r, tid)
+            await db.executemany(
+                """INSERT INTO cdp.audit_log (event_type, token_id, user_sub, detail)
+                   VALUES ('PAT_REVOKED', $1, $2, $3::jsonb)""",
+                [(tid, event.userSub, json.dumps({"trigger": "keycloak", "event": event_type})) for tid in token_ids],
+            )
+        return {"processed": len(token_ids), "action": "revoked"}
+
+    # LOGOUT: drop JWT cache only, PATs remain.
+    rows = await db.fetch(
+        "SELECT token_id FROM cdp.pat WHERE user_sub=$1 AND status='ACTIVE'",
+        event.userSub,
+    )
+    token_ids = [row["token_id"] for row in rows]
+    dropped = rc.invalidate_jwt_cache(r, token_ids) if token_ids else 0
+    return {"processed": len(token_ids), "action": "jwt-cache-cleared", "keysDeleted": dropped}
+
 
 @router.post("/audit", status_code=202)
 async def receive_audit_batch(

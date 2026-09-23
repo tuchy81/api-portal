@@ -79,12 +79,18 @@ CREATE INDEX idx_app_user   ON cdp.application(user_sub, status);
 CREATE INDEX idx_app_status ON cdp.application(status, created_at DESC);
 
 -- 2.1.4 PAT
+-- token_hash: SHA-256(secret) hex 64자. secret이 256bit CSPRNG이므로 memory-hard
+--   해시(Argon2id 등) 불필요 — §3.2 참조.
+-- token_hmac: HMAC-SHA256(server_key, secret) hex 64자. Redis 캐시 미스 시
+--   /internal/pat/{tokenId}가 이 값을 반환하고, 게이트웨이 pat-auth가 이 값과
+--   요청의 HMAC을 비교(Fail-Closed)한다. 평문 미보관, 응답 노출 금지.
 CREATE TABLE cdp.pat (
     token_id     VARCHAR(12)  PRIMARY KEY,             -- 공개 식별자
     app_id       UUID         NOT NULL REFERENCES cdp.application(app_id),
     user_sub     VARCHAR(64)  NOT NULL,
     token_name   VARCHAR(100) NOT NULL,
-    token_hash   VARCHAR(255) NOT NULL,                -- Argon2id
+    token_hash   VARCHAR(64)  NOT NULL,                -- SHA-256(secret) hex
+    token_hmac   VARCHAR(64)  NOT NULL,                -- HMAC-SHA256(server_key, secret) hex
     scopes       TEXT[]       NOT NULL,
     status       VARCHAR(20)  NOT NULL DEFAULT 'ACTIVE'
                  CHECK (status IN ('ACTIVE','REVOKED','EXPIRED','INACTIVE')),
@@ -151,8 +157,10 @@ CREATE TABLE cdp.usage_stat_daily (
 
 | 키 패턴 | 타입 | TTL | 값 | 용도 |
 | :--- | :--- | :--- | :--- | :--- |
-| `cdp:pat:{tokenId}` | Hash | PAT 만료시각까지 | `hash`, `sub`, `scopes`, `status`, `cidr` | Gateway PAT 검증 |
-| `cdp:jwt:{tokenId}:{scopeHash}` | String | 240s | JWT 문자열 | 교환 결과 캐시 |
+| `cdp:pat:{tokenId}` | Hash | PAT 만료시각까지 | `hash`(=HMAC-SHA256 hex), `sub`, `scopes`, `status`, `cidr`, `rate_limit_tps`, `burst`, `daily_quota`, `monthly_quota`, `expires_at` | Gateway PAT 검증 (§3.2) |
+| `cdp:pat:neg:{tokenId}` | String | 30s | `1` | 존재하지 않는 tokenId의 부정 캐시 (fallback 폭주 방지) |
+| `cdp:jwt:{tokenId}:{scopeHash}` | String | 240s | JWT 문자열 | 교환 결과 캐시. `scopeHash`는 SHA-256(scope 공백조인) hex의 앞 16자 |
+| `cdp:jwtidx:{tokenId}` | Set | 300s | `cdp:jwt:...` 키 목록 | PAT 폐기 시 관련 JWT 캐시 일괄 삭제 |
 | `cdp:quota:d:{tokenId}:{yyyyMMdd}` | String(INCR) | 익일 00:05 | 누적 호출 수 | 일일 쿼터 |
 | `cdp:quota:m:{tokenId}:{yyyyMM}` | String(INCR) | 익월 5일 | 누적 호출 수 | 월 쿼터 |
 | `cdp:rl:{tokenId}` | Hash | 60s | 토큰버킷 `tokens`, `ts` | TPS 제한 |
@@ -209,16 +217,21 @@ hdpat_<tokenId:12>_<secret:43>
 - `secret`: 256bit CSPRNG → base64url 43자 (무패딩)
 - 접두사 `hdpat_`: 시크릿 스캐너 탐지 패턴 `hdpat_[A-Za-z0-9]{12}_[A-Za-z0-9_-]{43}`
 
-### 3.2 해시 파라미터 (Argon2id)
-| 파라미터 | 값 | 비고 |
-| :--- | :--- | :--- |
-| memory | 19 MiB (19456 KB) | OWASP 권고 최소 구성 |
-| iterations | 2 | |
-| parallelism | 1 | Gateway 검증 지연 고려 |
-| salt | 16 bytes (랜덤) | |
-| output | 32 bytes | |
+### 3.2 검증 값 (SHA-256 + HMAC-SHA256)
 
-> **Gateway 성능 고려**: Argon2id 검증은 요청마다 수행 시 지연이 크므로, **Redis에 `tokenId → HMAC-SHA256(secret, serverKey)` 사전계산 값**을 함께 저장하여 Gateway 단에서는 상수시간 HMAC 비교로 처리. Argon2id 해시는 DB 원장 및 캐시 미스 시 포털 백엔드 검증용으로만 사용.
+PAT secret 원문은 256bit CSPRNG로 생성되므로 사전 공격 대상이 되는 저엔트로피 공간이 존재하지 않습니다. 따라서 Argon2id/bcrypt 같은 memory-hard 해시 대신 아래 2단 구성을 사용합니다.
+
+| 저장 위치 | 필드 | 알고리즘 | 사용 시점 |
+| :--- | :--- | :--- | :--- |
+| PostgreSQL `cdp.pat.token_hash` | 64자 hex | `SHA-256(secret)` | (예비) 원장 대조·감사용. 게이트웨이 hot path에서는 사용하지 않음 |
+| PostgreSQL `cdp.pat.token_hmac` | 64자 hex | `HMAC-SHA256(server_key, secret)` | Redis 캐시 미스 시 `/internal/pat/{tokenId}` 응답에 포함, 게이트웨이가 검증 |
+| Redis `cdp:pat:{tokenId}` hash 필드 `hash` | 64자 hex | `HMAC-SHA256(server_key, secret)` | 게이트웨이 hot path 검증 (상수시간 비교) |
+
+- **server_key**: 게이트웨이·포털 공용 secret. K8s Secret / Vault로 관리하며 주기적 회전 시 두 키 병존 → 순차 교체 절차 필요.
+- **평문 미보관 원칙**: secret 원문은 발급 응답에서 1회만 노출되고, DB·Redis 어디에도 저장되지 않음.
+- **Fail-Closed 검증**: `hash` 값이 부재하면 게이트웨이는 무조건 401 반환. 캐시 미스 fallback도 동일 검증을 수행.
+
+> **왜 Argon2id가 아닌가**: OWASP가 Argon2id를 권고하는 대상은 사용자가 선택한 비밀번호 등 저엔트로피 secret이다. PAT secret은 32byte CSPRNG(≈256bit)로 사전 공격 자체가 성립하지 않으므로, memory-hard 해시로 인한 검증 지연은 순수 비용이다.
 
 ### 3.3 상태 전이
 

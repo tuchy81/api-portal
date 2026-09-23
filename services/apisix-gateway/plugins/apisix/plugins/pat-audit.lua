@@ -18,6 +18,17 @@ local schema = {
         internal_api_key = { type = "string", default = "" },
         audit_batch_size = { type = "integer", default = 100 },
         audit_flush_interval_s = { type = "number", default = 5 },
+        -- Security events (AUTH_FAILED / SCOPE_DENIED / QUOTA_EXCEEDED /
+        -- EXCHANGE_FAILED) are also XADDed to a Redis Stream so the
+        -- portal-side consumer can persist them durably even if the HTTP
+        -- batch flush loses the buffer at worker exit. Non-security events
+        -- (API_CALL) still ride the HTTP batch alone — losing a subset of
+        -- successful API_CALL rows only skews aggregate stats.
+        redis_host = { type = "string", default = "redis" },
+        redis_port = { type = "integer", default = 6379 },
+        redis_password = { type = "string", default = "" },
+        security_stream_key = { type = "string", default = "cdp:audit:security" },
+        security_stream_maxlen = { type = "integer", default = 100000 },
     },
     required = { "portal_backend_url" },
 }
@@ -122,6 +133,37 @@ local function classify_event(error_code)
     return "ERROR"
 end
 
+-- Events we can't afford to drop on worker exit or on portal-backend
+-- unavailability. Anything here is XADDed to a Redis Stream in addition to
+-- the HTTP batch — the stream consumer on portal-backend persists it and
+-- XACKs; retry on the same message id is safe (idempotent insert not
+-- required because audit_log is an append-only ledger — a rare duplicate is
+-- preferable to a silent drop).
+local SECURITY_EVENTS = {
+    AUTH_FAILED = true,
+    SCOPE_DENIED = true,
+    QUOTA_EXCEEDED = true,
+    EXCHANGE_FAILED = true,
+}
+
+local function push_security_event(conf, entry)
+    local red, err = common.redis_connect(conf.redis_host, conf.redis_port, conf.redis_password)
+    if not red then
+        core.log.warn("pat-audit: security stream connect failed: ", err)
+        return
+    end
+    -- MAXLEN ~ N (approximate trim) keeps the stream from growing without
+    -- bound if the consumer stalls; the consumer runs on portal-backend and
+    -- can fall behind during incidents.
+    local ok, xerr = red:xadd(conf.security_stream_key,
+        "MAXLEN", "~", tostring(conf.security_stream_maxlen), "*",
+        "payload", cjson.encode(entry))
+    if not ok then
+        core.log.warn("pat-audit: XADD failed: ", xerr)
+    end
+    common.redis_keepalive(red)
+end
+
 function _M.log(conf, ctx)
     local latency_ms
     local rt = tonumber(ctx.var.request_time)
@@ -144,6 +186,10 @@ function _M.log(conf, ctx)
     }
 
     table.insert(_batch, entry)
+
+    if SECURITY_EVENTS[entry.event_type] then
+        push_security_event(conf, entry)
+    end
 
     -- The periodic timer is per worker, not per route, so it keeps whichever
     -- route's endpoint/key/interval registered it first. Those are

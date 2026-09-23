@@ -131,9 +131,11 @@ local function now_iso_utc()
 end
 
 -- Fallback: ask portal-backend for PAT metadata on a Redis cache miss.
--- Mirrors plugins/pat_auth.py's behaviour, including the fact that HMAC
--- verification is skipped for this path (no HMAC ships in the fallback
--- payload — only Redis, populated at issuance time, has it).
+-- Portal returns the HMAC from cdp.pat.token_hmac so the same Fail-Closed
+-- verification runs on both Redis-hit and Redis-miss paths. If the portal
+-- response ever omits the hmac (legacy row without token_hmac, or a
+-- misconfigured backend), the caller sees hash="" and the rewrite handler
+-- rejects the request rather than falling through unverified.
 local function fetch_from_portal(conf, token_id)
     local headers = { ["Accept"] = "application/json" }
     if conf.internal_api_key and conf.internal_api_key ~= "" then
@@ -161,7 +163,7 @@ local function fetch_from_portal(conf, token_id)
         scopes = cjson.encode(data.scopes or {}),
         status = data.status,
         cidr = cjson.encode(data.cidr or {}),
-        hash = "",
+        hash = data.hmac or "",
         rate_limit_tps = tostring((data.quota and data.quota.rateLimitTps) or 10),
         burst = tostring((data.quota and data.quota.burst) or 20),
         daily_quota = tostring((data.quota and data.quota.dailyQuota) or 5000),
@@ -234,12 +236,18 @@ function _M.rewrite(conf, ctx)
         return common.problem_json(ctx, 401, "CDP-1001", "Invalid or revoked token", "Token has expired")
     end
 
-    if meta.hash and meta.hash ~= "" then
-        local expected = common.hmac_sha256_hex(conf.server_key, secret)
-        if not common.constant_time_eq(expected, meta.hash) then
-            common.redis_keepalive(red)
-            return common.problem_json(ctx, 401, "CDP-1001", "Invalid or revoked token", "Token signature mismatch")
-        end
+    -- Fail-Closed: HMAC must always be present (Redis hit rows always have it,
+    -- portal fallback returns it from cdp.pat.token_hmac). An empty hash means
+    -- either a legacy row that never had HMAC material or a misbehaving portal
+    -- response — either way, refuse to authenticate rather than fall through.
+    if not meta.hash or meta.hash == "" then
+        common.redis_keepalive(red)
+        return common.problem_json(ctx, 401, "CDP-1001", "Invalid or revoked token", "hash unavailable for verification")
+    end
+    local expected = common.hmac_sha256_hex(conf.server_key, secret)
+    if not common.constant_time_eq(expected, meta.hash) then
+        common.redis_keepalive(red)
+        return common.problem_json(ctx, 401, "CDP-1001", "Invalid or revoked token", "Token signature mismatch")
     end
 
     local client_ip = ctx.cdp_client_ip

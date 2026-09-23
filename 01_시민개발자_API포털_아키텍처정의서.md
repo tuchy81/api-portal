@@ -49,7 +49,7 @@
 | R-04 | 기능 | PAT별 Scope, Rate Limit(TPS), Daily/Monthly Quota 설정 | 필수 |
 | R-05 | 기능 | 사용량 통계 대시보드(호출 수, 오류율, 응답시간, 쿼터 소진율) | 필수 |
 | R-06 | 연계 | PAT → OIDC JWT 교환(RFC 8693) 후 내부 Gateway 전달 | 필수 |
-| R-07 | 보안 | PAT 해시 저장(Argon2id), 평문 미보관 | 필수 |
+| R-07 | 보안 | PAT 검증값 이중 보관(원장 SHA-256 + HMAC-SHA256), 평문 미보관. Argon2id 등 memory-hard 해시는 채택하지 않음 — secret이 256bit CSPRNG이라 사전 공격 공간 자체가 존재하지 않음 (SA-SPEC-CDP-002 §3.2 참조) | 필수 |
 | R-08 | 보안 | 최소 권한 원칙 — IdP 보유 권한 ∩ 공개 API Scope 범위로 제한 | 필수 |
 | R-09 | 보안 | 전 호출 감사 로그(PAT ID ↔ User ID ↔ JWT jti 상관관계) | 필수 |
 | R-10 | 비기능 | Gateway 추가 지연 P95 ≤ 50ms (토큰 캐시 적중 시) | 필수 |
@@ -141,7 +141,7 @@ flowchart LR
 - **기본 흐름**
   1. 시민개발자가 PAT 이름·유효기간(최대 90일) 지정 후 발급 요청
   2. 시스템이 CSPRNG로 토큰 생성 → `hdpat_<tokenId>_<secret>` 형식 조립
-  3. secret을 Argon2id로 해시하여 DB 저장, 평문은 응답으로 **1회만** 반환
+  3. secret의 SHA-256 및 HMAC-SHA256(server_key, secret)을 DB에 저장, 평문은 응답으로 **1회만** 반환 (SA-SPEC-CDP-002 §3.2)
   4. Redis에 PAT 메타(User ID, Scope, 쿼터 한도) 캐시 적재
 - **예외**: 동일 신청 건의 활성 PAT가 상한(기본 3개) 초과 시 발급 거부
 
@@ -286,7 +286,7 @@ sequenceDiagram
     GW->>GW: PAT 형식 파싱 (tokenId, secret)
     GW->>Redis: GET pat:{tokenId}
     Redis-->>GW: {userSub, scopes, status, quota}
-    GW->>GW: Argon2id 해시 비교 · 만료/상태 확인
+    GW->>GW: HMAC-SHA256 비교 · 만료/상태 확인
     GW->>GW: 요청 경로·메서드 ↔ 허용 Scope 매칭
     GW->>Redis: INCR quota:{tokenId}:{yyyymmdd}<br/>+ Rate Limit 토큰버킷 차감
     Redis-->>GW: 잔여 쿼터 4,231 / 5,000
@@ -396,7 +396,7 @@ sequenceDiagram
 
     Dev->>UI: PAT 발급 요청 (이름, 유효기간 90일)
     UI->>API: POST /portal/v1/tokens
-    API->>API: CSPRNG secret 생성 → Argon2id 해시
+    API->>API: CSPRNG secret 생성 → SHA-256 및 HMAC-SHA256(server_key) 계산
     API->>DB: INSERT pat (hash, scopes, quota, expires_at)
     API->>Redis: SET pat:{tokenId} (메타 캐시, TTL=만료시각)
     API-->>UI: 201 {token:"hdpat_xxx_yyy"} ※ 1회 노출
@@ -490,7 +490,8 @@ erDiagram
         uuid token_id PK
         uuid app_id FK
         string user_sub FK
-        string token_hash
+        string token_hash "SHA-256(secret) hex 64자"
+        string token_hmac "HMAC-SHA256(server_key, secret) hex 64자"
         string status
         timestamp expires_at
         timestamp last_used_at
@@ -548,7 +549,7 @@ erDiagram
 
 ### 8.2 PAT 보안 정책
 1. **형식**: `hdpat_<12자 tokenId>_<43자 base64url secret>` (엔트로피 256bit)
-2. **저장**: secret은 Argon2id(m=64MB, t=3, p=4) 해시. 평문·복호화 가능 형태 보관 금지
+2. **저장**: secret은 SHA-256 hex (원장 `cdp.pat.token_hash`, VARCHAR(64)) 와 HMAC-SHA256(server_key, secret) hex (원장 `cdp.pat.token_hmac`, VARCHAR(64)) 를 함께 저장. Argon2id 미사용 이유는 SA-SPEC-CDP-002 §3.2 참조. 평문·복호화 가능 형태 보관 금지
 3. **노출**: 발급 응답 1회. 재조회 불가, 분실 시 재발급만 허용
 4. **수명**: 기본 90일, 최대 180일(예외 승인 시). 만료 D-7/D-1 알림
 5. **개수 제한**: 신청 건당 활성 PAT 3개, 사용자당 10개

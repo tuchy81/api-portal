@@ -144,6 +144,7 @@ def _build_route(api: dict, scopes: list[dict]) -> dict:
                 "regex_uri": [_rewrite_pattern(public_path), f"{upstream_path}$1"],
             },
             "pat-audit": {
+                **common_redis,
                 "portal_backend_url": settings.portal_backend_internal_url,
                 "internal_api_key": settings.internal_api_key,
                 "audit_batch_size": 100,
