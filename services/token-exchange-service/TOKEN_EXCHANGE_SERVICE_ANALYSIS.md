@@ -205,6 +205,9 @@ from pydantic_settings import BaseSettings
 from pydantic import Field
 
 class Settings(BaseSettings):
+    # 2026-09-26 이후 로컬 컴포즈에서는 `KEYCLOAK_URL=http://keycloak:8080` (실 Keycloak 24.0.0)이
+    # 주입되어 이 기본값을 덮어씁니다. `mock-keycloak:8180` 기본값은 컴포즈 환경 변수 없이 단독으로
+    # TXS를 돌릴 때의 안전망으로만 남아있고 실제 실행 경로에서는 사용되지 않습니다.
     keycloak_url: str = "http://mock-keycloak:8180"
     keycloak_realm: str = "hd"
     exchanger_client_id: str = "citizen-gw-exchanger"        # TXS가 Keycloak에 자신을 인증하는 서비스 계정
@@ -527,7 +530,12 @@ async def exchange_token(token_id: str, user_sub: str, scopes: list[str]) -> dic
                 "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
                 "requested_subject": user_sub,                  # 이 사용자로 impersonate 요청
                 "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
-                "audience": "internal-api-gateway",             # 발급된 토큰이 유효한 대상(내부 API 게이트웨이)
+                # 2026-09-26 실 Keycloak(24.0.0) 전환 후 제거: `--features=token-exchange`가 활성화된
+                # 실 Keycloak은 audience가 명시되면 대상 클라이언트의 fine-grained token-exchange 권한
+                # 정책을 강제한다. dev realm에는 그 정책이 설정돼 있지 않아 `Client not allowed to exchange`
+                # 로 거부되었다. 대신 `citizen-gw-exchanger`의 audience protocol mapper가 발급되는
+                # access token의 `aud`에 `internal-api-gateway`를 그대로 주입하도록 realm-import에 넣었다.
+                # "audience": "internal-api-gateway",
                 "scope": scope_str,                              # PAT에 부여된 scope 그대로 전달
                 "cdp_pat_id": token_id,                          # Keycloak 쪽에서 감사/매핑용으로 남길 수 있는 커스텀 클레임 힌트
             },

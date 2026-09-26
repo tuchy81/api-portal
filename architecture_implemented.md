@@ -2,8 +2,11 @@
 
 > 이 문서는 `01_시민개발자_API포털_아키텍처정의서.md` / `02_시민개발자_API포털_구현상세스펙.md`에서
 > **실제로 이 리포지토리에 구현된 부분만**을 코드 기준으로 정리한 문서입니다. 스펙과의 차이(미구현/단순화된
-> 부분)는 각 절 하단 "스펙과의 차이"에 명시합니다. Zone 3(내부 게이트웨이/PDP/MSA)와 Zone 4(Keycloak)는
-> 여전히 목업(`mock-keycloak`, `mock-internal-gw`)입니다.
+> 부분)는 각 절 하단 "스펙과의 차이"에 명시합니다.
+>
+> Zone 4는 **2026-09-26부터 실 Keycloak(`quay.io/keycloak/keycloak:24.0.0`)로 전환**되었고, 기존
+> `mock-keycloak` 서비스 블록은 롤백용으로 컴포즈에 그대로 남아 있지만 어떤 서비스도 참조하지 않습니다.
+> Zone 3(내부 게이트웨이/PDP/MSA)는 여전히 목업(`mock-internal-gw`)입니다.
 
 ---
 
@@ -32,8 +35,8 @@ flowchart TB
         IGW["mock-internal-gw :8090<br/>JWT 검증 + PDP(always-permit) + 목업 API"]
     end
 
-    subgraph Z4["Zone 4 — 목업 IdP"]
-        KC["mock-keycloak :8180<br/>RSA 서명 JWT 발급 + Token Exchange(RFC 8693)"]
+    subgraph Z4["Zone 4 — IdP (실 Keycloak)"]
+        KC["keycloak :8080 (호스트 :8181)<br/>Keycloak 24.0.0 · realm=hd<br/>--features=token-exchange, --import-realm<br/>(mock-keycloak :8180은 컴포즈에 남아있으나 미사용)"]
     end
 
     BROWSER -->|BFF 세션 쿠키| WEB
@@ -92,7 +95,7 @@ sequenceDiagram
     participant R as Redis
     participant PB as portal-backend
     participant TXS as token-exchange-service
-    participant KC as mock-keycloak
+    participant KC as keycloak (실 Keycloak 24)
     participant IGW as mock-internal-gw
 
     C->>GW: GET /capi/v1/vendors<br/>Authorization: Bearer hdpat_{id}_{secret}
@@ -195,7 +198,8 @@ flowchart LR
 | `token-exchange-service` | FastAPI | 8081 | RFC 8693 Token Exchange, JWT 캐시, 서킷브레이커 |
 | `redis` | Redis 7 | 6379 | PAT 메타 캐시, 쿼터 카운터, JWT 캐시, negative cache, 서킷브레이커 상태 |
 | `postgres` | Postgres 16 | 5432 | `cdp` 스키마 (카탈로그/신청/PAT/쿼터정책/감사로그/일별통계) |
-| `mock-keycloak` | FastAPI + RSA | 8180 | (Zone 4 목업) OIDC 발급 + Token Exchange |
+| `keycloak` | Keycloak 24.0.0 (`quay.io/keycloak/keycloak`) | 8080 컨테이너 / 8181 호스트 | (Zone 4) OIDC 발급 + Token Exchange(RFC 8693). realm `hd` + 4명 사용자·HR/org 속성·역할·client `citizen-gw-exchanger`(impersonation 롤 부여) + audience client `internal-api-gateway`가 기동 시 `--import-realm`으로 로드됨 |
+| `mock-keycloak` | FastAPI + RSA | 8180 | (롤백용, 미참조) 실 Keycloak 이전에 사용하던 목업 IdP. `docker-compose.yml`에 남아있지만 어떤 서비스도 `depends_on`에 포함하지 않음 |
 | `mock-internal-gw` | FastAPI | 8090 | (Zone 3 목업) JWT 검증 + PDP(always-permit) + 목업 API 3종 |
 | `prometheus` / `grafana` | — | 9090 / 3001 | 관측성 |
 
@@ -320,13 +324,41 @@ erDiagram
 ## 6. 로컬 실행
 
 ```bash
-docker compose up -d postgres redis mock-keycloak mock-internal-gw \
+docker compose up -d postgres redis keycloak mock-internal-gw \
   etcd token-exchange-service portal-backend citizen-gateway portal-web
 ```
 
+- `keycloak`은 `--import-realm`으로 `infra/keycloak/hd-realm.json`을 첫 기동 시 로드합니다. realm 정의를
+  다시 반영하려면 `docker compose rm -sf keycloak && docker compose up -d keycloak`로 컨테이너를 재생성해야
+  합니다(dev-mode의 H2 저장소가 컨테이너 라이프사이클에 매여 있어 restart만으로는 재임포트되지 않습니다).
+- Keycloak 관리 콘솔: `http://localhost:8181/` (`admin`/`admin`, 로컬 전용). 컨테이너 내부에서 참조하는 issuer는
+  `KC_HOSTNAME_URL=http://keycloak:8080`으로 고정되어 있어 발급된 JWT의 `iss` 클레임이
+  `portal-backend`/`TXS`/`mock-internal-gw`의 `KC_URL` 값과 일치합니다.
 - `etcd`는 빈 상태로 시작 → `portal-backend` 기동 시 `02_seed.sql`로 미리 심어둔 3개 PUBLISHED API
   (`MDM-VENDOR`/`FIN-ORDER`/`HR-EMPLOYEE`)를 자동으로 APISIX에 등록합니다.
 - APISIX Admin API: `http://localhost:9180/apisix/admin/routes` (`X-API-KEY: edd1c9f034335f136f87ad84b625c8f1`, dev 전용 키).
 - 통합/보안 테스트: `cd tests && pip install -r requirements.txt && pytest integration/ security/ -v`
   (전체 19건, docker-compose 기본 포트 그대로 사용 시 통과 — 단 컨테이너 UTC와 호스트 로컬 타임존이 자정
   경계를 사이에 두고 갈리는 순간에는 일별 쿼터 키 불일치로 3건이 일시적으로 실패할 수 있음, 로직 버그 아님).
+
+### Zone 4 (Keycloak) 세부 구성
+
+`infra/keycloak/hd-realm.json`에 정의된 realm 스냅샷:
+
+| 항목 | 내용 |
+| :-- | :-- |
+| Realm | `hd` (`sslRequired=none`, `accessTokenLifespan=300`) |
+| Client — `citizen-gw-exchanger` | confidential + service account. secret `exchanger-secret-xyz`. 서비스 계정에 realm-management `impersonation`·`view-users`·`query-users` 롤 부여(RFC 8693 `requested_subject` 임퍼소네이션 허용). 클라이언트 protocol mapper로 하드코딩 클레임(`cdp_channel=citizen`), 오디언스(`aud=internal-api-gateway`), HR/org 속성 8종(`user_id`,`company`,`org_cd`,`asgn_cd`,`dept_cd`,`job_tit_cd`,`offi_res_cd`,`user_origin`)을 access token에 자동 주입 |
+| Client — `internal-api-gateway` | bearer-only. audience 매핑 상대. 실제 인증에는 쓰이지 않음 |
+| Realm roles | `citizen-developer`, `mdm-reader`, `api-owner`, `platform-admin`, `service-account` |
+| 사용자 4명 (id=sub) | `u-test-001`/hong.gildong (mdm-reader+citizen-developer), `u-test-002`/api.owner (api-owner+citizen-developer), `u-admin-001`/platform.admin (platform-admin+citizen-developer), `a453587`/lee.changyob (citizen-developer). 모두 비밀번호 `password`, HR/org 속성 세팅 |
+
+**실 Keycloak 전환 시 코드 조정 사항 (2026-09-26)**
+
+- `services/token-exchange-service/keycloak_client.py`: RFC 8693 exchange 요청에서 `audience` 파라미터를 제거.
+  실 Keycloak은 `--features=token-exchange`가 켜져 있을 때 클라이언트-투-클라이언트 exchange의 audience에
+  fine-grained authorization 정책을 강제하는데 dev realm은 그 정책을 설정하지 않았습니다. 대신
+  `citizen-gw-exchanger`의 audience protocol mapper가 `aud=internal-api-gateway`를 그대로 주입합니다.
+- `services/portal-backend/routers/dev_auth.py`: `client_credentials`로 서비스 계정 토큰을 먼저 발급받고 그것을
+  `subject_token`으로 실은 뒤 `requested_subject`로 교환하는 2-스텝 흐름으로 변경. 목업 Keycloak은 client 인증만으로
+  교환을 허용했지만 실 Keycloak은 `Client not allowed to exchange`로 거부합니다.

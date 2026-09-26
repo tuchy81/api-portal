@@ -2,8 +2,8 @@
 # Zone 1 Client Examples — cURL (spec Appendix A.1)
 
 GATEWAY_URL="http://localhost:9080"
-PORTAL_URL="http://localhost:8080"
-KC_URL="http://localhost:8180"
+PORTAL_URL="http://localhost:8082"
+KC_URL="http://localhost:8080"
 
 # Export your PAT (never hardcode in scripts)
 # export CAPI_TOKEN="hdpat_XXXXXXXXXXXX_YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY"

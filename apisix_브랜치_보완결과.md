@@ -269,3 +269,36 @@ docker compose up -d
 **모니터링**
 - `cdp:audit:security` stream XLEN, PEL(pending) 모니터링 대시보드
 - audit_consumer XACK rate 지표
+
+---
+
+## 10. 후속: 실 Keycloak 전환 (2026-09-26)
+
+로컬 컴포즈의 Zone 4를 `mock-keycloak`에서 실 `quay.io/keycloak/keycloak:24.0.0`로 교체했습니다.
+목업 자체 코드는 그대로 두고(`services/mock-keycloak/`, 이미지도 유지) 컴포즈 상에서만 활성 IdP를
+바꿔치기하는 방식이라 필요하면 depends_on 한 곳만 되돌려 즉시 롤백할 수 있습니다.
+
+### 반영 내용
+
+| 항목 | 변경 |
+| :-- | :-- |
+| `docker-compose.yml` | `keycloak` 서비스 신설(`start-dev --import-realm --features=token-exchange`, `KC_HOSTNAME_URL=http://keycloak:8080`, 포트 8181, `KC_HEALTH_ENABLED=true` + `/dev/tcp` 헬스체크). `portal-backend`/`token-exchange-service`/`mock-internal-gw`의 `KC_URL`·`KEYCLOAK_URL`을 `http://keycloak:8080`으로 전환하고 `depends_on`도 `keycloak: service_healthy`로 교체. `mock-keycloak` 블록은 남아 있으나 어떤 서비스도 참조하지 않음 |
+| `infra/keycloak/hd-realm.json` (신규) | realm `hd` + 사용자 4명(HR/org 속성·역할·비밀번호 `password`) + 서비스 계정에 realm-management `impersonation`·`view-users`·`query-users` 롤 부여 + 클라이언트 `citizen-gw-exchanger`(confidential, secret `exchanger-secret-xyz`)에 protocol mapper 9종(`cdp_channel` 하드코딩, `aud=internal-api-gateway` 오디언스, HR/org 속성 8종) + 오디언스용 bearer-only 클라이언트 `internal-api-gateway` |
+| `services/token-exchange-service/keycloak_client.py` | RFC 8693 exchange 요청에서 `audience` 파라미터 제거. 실 Keycloak(`--features=token-exchange`)은 audience가 명시되면 대상 클라이언트의 fine-grained token-exchange 권한 정책을 강제하는데 dev realm은 그 정책을 두지 않았습니다. 대신 audience protocol mapper가 발급 토큰의 `aud`에 `internal-api-gateway`를 그대로 주입합니다 |
+| `services/portal-backend/routers/dev_auth.py` | 목업이 허용했던 "client 인증만으로 exchange" 형태를 실 Keycloak은 `Client not allowed to exchange`로 거부하므로, `client_credentials`로 서비스 계정 토큰을 먼저 발급받고 이를 `subject_token`으로 넘기는 2-스텝 흐름으로 변경 |
+
+### 검증 결과 (로컬)
+
+1. `discovery`, `client_credentials`, `token-exchange` 모두 200 OK 응답.
+2. 교환된 access token 클레임:
+   - `iss=http://keycloak:8080/realms/hd`, `sub=u-test-001`, `aud=internal-api-gateway`, `azp=citizen-gw-exchanger`
+   - `cdp_channel=citizen`, `preferred_username=hong.gildong`
+   - HR/org: `user_id=EMP10001`, `company=HDHI`, `org_cd=ORG-IT`, `asgn_cd=ASG-DEV`, `dept_cd=DEPT-IT01`, …
+   - `realm_access.roles=[mdm-reader, citizen-developer]`
+3. E2E: dev-login → application 생성/승인 → PAT 발급 → `GET http://localhost:9080/capi/v1/vendors` 200 응답. `mock-internal-gw` 로그에 `[INTERNAL-GW] sub=u-test-001 pat=… channel=citizen … 200 OK` 확인.
+
+### 알려진 잔여
+
+- **서비스 계정 롤 조회 부재**: `portal-backend/routers/applications.py::_get_user_roles_from_idp`는 `/admin/realms/hd/users/{sub}`를 비인증으로 호출합니다. 목업은 무인증을 허용했지만 실 Keycloak은 401을 돌려주므로 이 경로는 항상 `WARN`을 찍고 빈 리스트로 폴백합니다. 다행히 자격 검증은 IdP 롤이 비어 있어도 JWT의 `realm_access.roles`(=`user.roles`)로 통과 판단이 가능해 기능은 그대로지만, R-08 자격검증 강화 작업이 붙는다면 여기에 admin token(`client_credentials` + `realm-management` 롤) 호출을 얹어야 합니다.
+- **audience fine-grained 정책 미설정**: 위에서 audience 파라미터를 뺀 우회로 처리했습니다. 운영 realm에서는 `citizen-gw-exchanger` → `internal-api-gateway` 방향의 token-exchange scope 권한을 명시적으로 부여하고 TXS에도 audience 파라미터를 복원하는 것이 정석입니다.
+- **realm 재임포트**: dev-mode Keycloak은 H2 DB가 컨테이너 라이프사이클에 매여 있어 `docker compose restart keycloak`만으로는 realm 정의 변경이 반영되지 않습니다. `docker compose rm -sf keycloak && docker compose up -d keycloak`로 재생성해야 합니다.

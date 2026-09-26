@@ -64,16 +64,51 @@ services:
       timeout: 5s
       retries: 10
 
+  # ---------------------------------------------------------------------------
+  # Keycloak (real) — replaces mock-keycloak as the active OIDC provider.
+  # mock-keycloak service block is kept above so the stack can be flipped back
+  # by swapping KC_URL / KEYCLOAK_URL and depends_on entries.
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.0
+    command: ["start-dev", "--import-realm", "--features=token-exchange"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      # Force issuer / discovery URLs to the docker network hostname so
+      # the JWT `iss` claim matches what portal-backend / TXS / mock-internal-gw
+      # compare it against (they all use http://keycloak:8080/realms/hd).
+      KC_HOSTNAME_URL: http://keycloak:8080
+      KC_HOSTNAME_ADMIN_URL: http://keycloak:8080
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./infra/keycloak/hd-realm.json:/opt/keycloak/data/import/hd-realm.json:ro
+    ports:
+      # Browser access requires the host port to match KC_HOSTNAME_URL's port
+      # so login redirects don't break. Add `127.0.0.1 keycloak` to the
+      # Windows hosts file to reach the admin console at http://keycloak:8080/.
+      - "8080:8080"
+    networks: [zone2-net]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /realms/hd/.well-known/openid-configuration HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n 1 <&3 | grep -q '200'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 45s
+
   mock-internal-gw:
     build: ./services/mock-internal-gw
     environment:
-      KC_URL: http://mock-keycloak:8180
+      KC_URL: http://keycloak:8080
       KC_REALM: hd
     ports:
       - "8090:8090"
     networks: [zone2-net]
     depends_on:
-      mock-keycloak:
+      keycloak:
         condition: service_healthy
 
   # ---------------------------------------------------------------------------
@@ -84,7 +119,7 @@ services:
       context: .
       dockerfile: services/token-exchange-service/Dockerfile
     environment:
-      KEYCLOAK_URL: http://mock-keycloak:8180
+      KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_REALM: hd
       EXCHANGER_CLIENT_ID: citizen-gw-exchanger
       EXCHANGER_CLIENT_SECRET: exchanger-secret-xyz
@@ -102,7 +137,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      mock-keycloak:
+      keycloak:
         condition: service_healthy
 
   portal-backend:
@@ -119,7 +154,7 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: changeme123
       SERVER_KEY: 5f3b8a2c1d9e4f7a6b0c5d2e8f1a3b4c
-      KC_URL: http://mock-keycloak:8180
+      KC_URL: http://keycloak:8080
       KC_REALM: hd
       KC_CLIENT_ID: citizen-gw-exchanger
       KC_CLIENT_SECRET: exchanger-secret-xyz
@@ -138,14 +173,18 @@ services:
       # Mock SSO for the local stack only — must be false anywhere real.
       ENABLE_DEV_AUTH: "true"
     ports:
-      - "8080:8080"
+      # Moved off host port 8080 so keycloak can take it — that lets the
+      # Windows browser (with `127.0.0.1 keycloak` in its hosts file) reach
+      # Keycloak at the same `http://keycloak:8080` URL that internal services
+      # use, keeping the JWT `iss` claim consistent.
+      - "8082:8080"
     networks: [zone2-net]
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      mock-keycloak:
+      keycloak:
         condition: service_healthy
 
   etcd:

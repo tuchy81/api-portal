@@ -45,7 +45,11 @@ async def exchange_token(user_sub: str, scopes: list[str]) -> dict:
                 "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
                 "requested_subject": user_sub,
                 "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
-                "audience": "internal-api-gateway",
+                # Do NOT pass `audience` here. Real Keycloak (feature=token-exchange)
+                # enforces fine-grained client-to-client exchange permissions when
+                # audience is set, which our dev realm does not configure. The
+                # exchanged JWT still carries aud=internal-api-gateway via the
+                # audience protocol mapper on citizen-gw-exchanger.
                 "scope": scope_str,
             },
         )

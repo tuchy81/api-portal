@@ -32,13 +32,35 @@ async def dev_login(body: dict):
 
     token_url = f"{settings.kc_url}/realms/{settings.kc_realm}/protocol/openid-connect/token"
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(
+        # Real Keycloak (feature=token-exchange) requires a subject_token in the
+        # exchange call — a bare client-authenticated requested_subject request
+        # returns "Client not allowed to exchange". So do the same 2-step flow
+        # as token-exchange-service: client_credentials first, then exchange.
+        svc_resp = await client.post(
             token_url,
             data={
-                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "grant_type": "client_credentials",
                 "client_id": settings.kc_client_id,
                 "client_secret": settings.kc_client_secret,
+                "scope": "openid",
+            },
+        )
+        if svc_resp.status_code != 200:
+            return JSONResponse(
+                {"error": "client_credentials failed", "detail": svc_resp.text},
+                status_code=502,
+            )
+        svc_token = svc_resp.json()["access_token"]
+
+        resp = await client.post(
+            token_url,
+            auth=(settings.kc_client_id, settings.kc_client_secret),
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "subject_token": svc_token,
+                "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
                 "requested_subject": user_id,
+                "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
                 "scope": "openid profile",
             },
         )

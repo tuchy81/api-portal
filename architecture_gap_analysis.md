@@ -67,8 +67,9 @@
 | UC-12 | PAT→JWT 토큰 교환 | ✅ 충족 | RFC 8693 교환·캐시·서킷브레이커 동작 |
 | UC-13 | 쿼터·Rate Limit 집행 | ✅ 충족 | 원자적 차감 검증 완료(동시 20건 중 정확히 10건 통과) |
 
-**액터 관점 공백**: 5개 액터 중 **보안 감사자(Auditor)는 실사용이 불가능**합니다. mock-keycloak의
-사용자 3명 누구도 `auditor` 역할을 갖고 있지 않아, UC-09의 감사자 경로는 한 번도 실행된 적이 없습니다.
+**액터 관점 공백**: 5개 액터 중 **보안 감사자(Auditor)는 실사용이 불가능**합니다. 실 Keycloak(`hd` realm)에
+로드된 사용자 4명 어느 누구도 `auditor` 역할을 갖고 있지 않아(`infra/keycloak/hd-realm.json`은 목업이 정의했던
+사용자 세트를 그대로 옮겨왔습니다), UC-09의 감사자 경로는 한 번도 실행된 적이 없습니다.
 
 ---
 
@@ -202,10 +203,15 @@ PAT 발급/폐기 API도 감사 INSERT를 포함하므로 **동반 실패**할 �
 - **미매칭 경로 오류 포맷**: `/capi/v1/*` 미등록 경로는 `CDP-2002`가 아닌 APISIX 기본 404를 반환.
 - **Zone2→Zone3 mTLS 미적용**(평문 HTTP), `auth.require_role()` 死코드, `unlock_if_mine.lua` 미사용,
   `PUT /tokens/{id}/quota`의 월별 쿼터 TTL 표기 차이(기능 영향 없음).
-- **부록 C.8 PoC 판정 체크리스트 9항목 중 8항목 미검증** — 특히 실제 Keycloak 버전 판정, 다운스코핑 실증,
-  내부 GW 무변경 수용 검증이 공백이라 **운영 Keycloak 전환 리스크가 정량화되지 않은 상태**입니다.
-  현재 mock-keycloak은 Scope가 `capi.`로 시작하면 무조건 통과시키는 느슨한 구현이라, 다운스코핑 검증이
-  사실상 이뤄지지 않고 있습니다.
+- **부록 C.8 PoC 판정 체크리스트 9항목 중 8항목 미검증** — 특히 다운스코핑 실증, 내부 GW 무변경 수용 검증이
+  공백이라 **운영 Keycloak 전환 리스크가 정량화되지 않은 상태**입니다.
+  2026-09-26 로컬 컴포즈의 Zone 4를 실 `quay.io/keycloak/keycloak:24.0.0`으로 교체하면서
+  실 Keycloak에서 RFC 8693 `requested_subject` 임퍼소네이션이 성립하는 것 자체는 검증되었으나(realm-import된
+  `hd` realm, `citizen-gw-exchanger`에 `impersonation` 롤 부여), scope 파라미터를 좁혔을 때 발급 토큰의 `scope`
+  클레임이 실제로 줄어드는지에 대한 실증은 여전히 미확인입니다. 또한 dev realm은 audience 클라이언트에
+  fine-grained token-exchange 권한 정책을 설정하지 않았기 때문에 TXS가 `audience` 파라미터를 보내지 않는
+  형태(대신 audience protocol mapper로 `aud=internal-api-gateway` 강제)로 우회했습니다 — 운영 realm에서는
+  이 정책을 명시적으로 켜고 audience 파라미터를 다시 활성화하는 방향으로 정리해야 합니다.
 
 ---
 
