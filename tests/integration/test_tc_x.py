@@ -5,7 +5,9 @@ from conftest import get_gw_headers, TXS_URL, USER_SUB
 pytestmark = pytest.mark.asyncio
 
 def _scope_hash(scopes: list) -> str:
-    return hashlib.sha256(" ".join(sorted(scopes)).encode()).hexdigest()[:8]
+    # Mirrors TXS cache._scope_hash / gateway pat-token-exchange.lua scope_hash
+    # (16 hex chars = 64 bits).
+    return hashlib.sha256(" ".join(sorted(scopes)).encode()).hexdigest()[:16]
 
 def _decode_jwt_unverified(token: str) -> dict:
     from jose import jwt as jose_jwt

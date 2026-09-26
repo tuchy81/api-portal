@@ -33,10 +33,43 @@ TOKEN_TTL = int(os.getenv("JWT_TTL", "300"))
 # Mock registries
 # ---------------------------------------------------------------------------
 MOCK_USERS = {
-    "u-test-001": {"username": "hong.gildong", "enabled": True, "roles": ["citizen-developer", "mdm-reader"]},
-    "u-test-002": {"username": "api.owner", "enabled": True, "roles": ["api-owner", "citizen-developer"]},
-    "u-admin-001": {"username": "platform.admin", "enabled": True, "roles": ["platform-admin", "citizen-developer"]},
+    "u-test-001": {
+        "username": "hong.gildong", "enabled": True, "roles": ["citizen-developer", "mdm-reader"],
+        # HR/org test claims for the pat-token-exchange claim -> header mapping.
+        # ASCII-only: raw HTTP header values are Latin-1/ASCII by convention,
+        # so non-ASCII (e.g. Korean) text here gets mangled by any consumer
+        # that decodes headers as Latin-1 (Python/Starlette does) — real
+        # "_cd" claims are codes anyway, not free-text names.
+        "user_id": "EMP10001", "company": "HDHI", "org_cd": "ORG-IT",
+        "asgn_cd": "ASG-DEV", "dept_cd": "DEPT-IT01", "job_tit_cd": "JOB-STAFF",
+        "offi_res_cd": "RES-SEOUL", "user_origin": "INTERNAL",
+    },
+    "u-test-002": {
+        "username": "api.owner", "enabled": True, "roles": ["api-owner", "citizen-developer"],
+        "user_id": "EMP10002", "company": "HDHI", "org_cd": "ORG-MDM",
+        "asgn_cd": "ASG-OWNER", "dept_cd": "DEPT-MDM01", "job_tit_cd": "JOB-LEAD",
+        "offi_res_cd": "RES-SEOUL", "user_origin": "INTERNAL",
+    },
+    "u-admin-001": {
+        "username": "platform.admin", "enabled": True, "roles": ["platform-admin", "citizen-developer"],
+        "user_id": "EMP90001", "company": "HDHI", "org_cd": "ORG-PLATFORM",
+        "asgn_cd": "ASG-ADMIN", "dept_cd": "DEPT-PLAT01", "job_tit_cd": "JOB-MANAGER",
+        "offi_res_cd": "RES-SEOUL", "user_origin": "INTERNAL",
+    },
+    "a453587": {
+        "username": "lee.changyob", "enabled": True, "roles": ["citizen-developer"],
+        "user_id": "a453587", "company": "HDHI", "org_cd": "ORG-IT",
+        "asgn_cd": "ASG-DEV", "dept_cd": "DEPT-IT01", "job_tit_cd": "JOB-STAFF",
+        "offi_res_cd": "RES-SEOUL", "user_origin": "INTERNAL",
+    },
 }
+
+# Claim keys copied from MOCK_USERS onto the token-exchange response's JWT
+# (kept as one list so it stays in sync with pat-token-exchange.lua's
+# CLAIM_HEADER_MAP without duplicating the mapping itself here).
+HR_ORG_CLAIM_KEYS = [
+    "user_id", "company", "org_cd", "asgn_cd", "dept_cd", "job_tit_cd", "offi_res_cd", "user_origin",
+]
 
 CLIENTS = {
     KC_CLIENT_ID: {"secret": KC_CLIENT_SECRET, "service_account": True}
@@ -153,23 +186,15 @@ async def token_endpoint(
         if not user["enabled"]:
             return JSONResponse({"error": "invalid_request", "error_description": "User disabled"}, status_code=400)
 
-        # Extract pat_id from subject_token if present (best-effort)
-        pat_id = None
-        if subject_token:
-            try:
-                unverified = jose_jwt.get_unverified_claims(subject_token)
-                pat_id = unverified.get("cdp_pat_id")
-            except Exception:
-                pass
-
         # Downscope: only return what was requested, intersected with user's available scopes
         allowed_user_scopes = set(f"capi.{role.split('-')[1]}.read" for role in user["roles"] if "-" in role)
         allowed_user_scopes.update(["openid", "profile"])
         final_scopes = [s for s in requested_scopes if s in allowed_user_scopes or s.startswith("capi.")] if requested_scopes else list(allowed_user_scopes)
 
         extra = {"cdp_channel": "citizen", "preferred_username": user["username"]}
-        if pat_id:
-            extra["cdp_pat_id"] = pat_id
+        for key in HR_ORG_CLAIM_KEYS:
+            if key in user:
+                extra[key] = user[key]
 
         claims = _base_claims(
             sub=requested_subject,

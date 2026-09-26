@@ -52,6 +52,31 @@ def invalidate_pat(r: redis_lib.Redis, token_id: str):
     pipe.delete(idx_key)
     pipe.execute()
 
+
+def invalidate_jwt_cache(r: redis_lib.Redis, token_ids: list[str]) -> int:
+    """Drop only the cached JWTs for the given PATs, leaving cdp:pat:* intact.
+
+    Used when a change (API scope redefinition, Keycloak role update) means the
+    next call must go through Token Exchange again to pick up the new scope
+    set or claims, but the PAT itself remains valid. Returns the number of JWT
+    cache entries deleted (best-effort — count reflects idx-set size before
+    the pipeline runs)."""
+    if not token_ids:
+        return 0
+    total = 0
+    for token_id in token_ids:
+        idx_key = f"cdp:jwtidx:{token_id}"
+        jwt_keys = r.smembers(idx_key)
+        if not jwt_keys:
+            continue
+        pipe = r.pipeline()
+        for jk in jwt_keys:
+            pipe.delete(jk)
+        pipe.delete(idx_key)
+        pipe.execute()
+        total += len(jwt_keys)
+    return total
+
 def update_pat_status_in_redis(r: redis_lib.Redis, token_id: str, status: str):
     """Update just the status field in Redis PAT hash (e.g., ACTIVE → REVOKED)."""
     key = f"cdp:pat:{token_id}"

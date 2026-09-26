@@ -133,6 +133,10 @@ async def list_employees(request: Request):
         return JSONResponse({"code": "CDP-1005", "message": "Insufficient scope for HR data"}, status_code=403)
     return {"items": MOCK_EMPLOYEES, "total": len(MOCK_EMPLOYEES)}
 
+@app.get("/bin")
+async def dump_headers(request: Request):
+    return dict(request.headers)
+
 @app.get("/internal/api/v1/health")
 @app.get("/health")
 async def health():

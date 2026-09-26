@@ -14,3 +14,6 @@ dist/
 .venv/
 venv/
 *:Zone.Identifier
+
+# 로컬 전용 compose 포트 우회 (머신별 포트 충돌 회피)
+docker-compose.override.yml

@@ -1,21 +1,24 @@
 <template>
   <div>
     <h2>내 신청 현황</h2>
-    <div class="card">
-      <table>
-        <thead><tr><th>신청 ID</th><th>API 이름</th><th>상태</th><th>신청일</th><th>부여 Scope</th></tr></thead>
-        <tbody>
-          <tr v-for="app in apps" :key="app.app_id">
-            <td><code>{{ app.app_id?.slice(0,8) }}...</code></td>
-            <td>{{ app.api_name }}</td>
-            <td><span :class="`badge badge-${app.status?.toLowerCase()}`">{{ app.status }}</span></td>
-            <td>{{ app.created_at?.slice(0,10) }}</td>
-            <td>{{ (app.granted_scopes || []).join(', ') || '-' }}</td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-if="!apps.length">신청 내역이 없습니다.</p>
-    </div>
+    <el-card shadow="never">
+      <el-table :data="apps" style="width: 100%">
+        <el-table-column label="신청 ID" width="120">
+          <template #default="{ row }"><code>{{ row.app_id?.slice(0, 8) }}...</code></template>
+        </el-table-column>
+        <el-table-column prop="api_name" label="API 이름" />
+        <el-table-column label="상태" width="120">
+          <template #default="{ row }"><el-tag :type="statusTagType(row.status)">{{ row.status }}</el-tag></template>
+        </el-table-column>
+        <el-table-column label="신청일" width="120">
+          <template #default="{ row }">{{ row.created_at?.slice(0, 10) }}</template>
+        </el-table-column>
+        <el-table-column label="부여 Scope">
+          <template #default="{ row }">{{ (row.granted_scopes || []).join(', ') || '-' }}</template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!apps.length" description="신청 내역이 없습니다." />
+    </el-card>
   </div>
 </template>
 
@@ -28,4 +31,9 @@ onMounted(async () => {
   const { data } = await api.get('/applications')
   apps.value = data.items
 })
+
+function statusTagType(status: string) {
+  const map: Record<string, string> = { APPROVED: 'success', PENDING: 'warning', REJECTED: 'danger', EXPIRED: 'info', WITHDRAWN: 'info' }
+  return map[status] || 'info'
+}
 </script>

@@ -1,17 +1,7 @@
 """PAT generation and cryptographic operations."""
 import secrets, hmac, hashlib, base64
-from argon2 import PasswordHasher
 
 BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-
-# Argon2id: OWASP recommended minimum (m=19MiB, t=2, p=1)
-PH = PasswordHasher(
-    memory_cost=19456,  # 19 MiB in KiB
-    time_cost=2,
-    parallelism=1,
-    hash_len=32,
-    salt_len=16,
-)
 
 def generate_token_id() -> str:
     """Generate a base62 12-character token ID from CSPRNG."""
@@ -40,16 +30,21 @@ def parse_pat(pat: str) -> tuple[str, str]:
         raise ValueError("Invalid PAT format")
     return parts[1], parts[2]
 
-def hash_secret_argon2(secret: str) -> str:
-    """Argon2id hash for DB storage."""
-    return PH.hash(secret)
+def hash_secret_sha256(secret: str) -> str:
+    """SHA256(secret) hex digest, for DB storage.
 
-def verify_argon2(secret: str, stored_hash: str) -> bool:
-    """Verify secret against stored Argon2id hash."""
-    try:
-        return PH.verify(stored_hash, secret)
-    except Exception:
-        return False
+    Plain SHA256 rather than a slow/memory-hard hash (e.g. Argon2id) is
+    fine here specifically because `secret` is a 32-byte CSPRNG value
+    (256 bits of entropy, see generate_secret()) rather than a
+    human-chosen password — there is no dictionary/low-entropy space for
+    a fast hash to make brute-forceable. Argon2id's cost is only a
+    meaningful defense against guessing low-entropy secrets.
+    """
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+def verify_secret_sha256(secret: str, stored_hash: str) -> bool:
+    """Constant-time compare against a stored SHA256 hash."""
+    return hmac.compare_digest(hash_secret_sha256(secret), stored_hash)
 
 def compute_hmac(secret: str, server_key: str) -> str:
     """HMAC-SHA256(secret, server_key) → hex. Stored in Redis for fast gateway comparison."""

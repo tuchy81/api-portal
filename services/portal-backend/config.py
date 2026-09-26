@@ -15,9 +15,19 @@ class Settings(BaseSettings):
     kc_realm: str = "hd"
     kc_client_id: str = "citizen-gw-exchanger"
     kc_client_secret: str = "exchanger-secret-xyz"
-    apisix_admin_url: str = "http://localhost:9180"
+    apisix_admin_url: str = "http://citizen-gateway:9180"
     apisix_admin_key: str = "edd1c9f034335f136f87ad84b625c8f1"
     gateway_url: str = "http://citizen-gateway:9080"
+    txs_url: str = "http://token-exchange-service:8081"
+    # How the gateway plugins should reach this service — baked into every
+    # route's pat-auth/pat-audit plugin config when we PUT it to Admin API.
+    portal_backend_internal_url: str = "http://portal-backend:8080"
+    # Shared secret for /internal/* (gateway -> portal-backend) and for the
+    # gateway -> TXS call. Empty disables the check, for local debugging only.
+    internal_api_key: str = ""
+    # Mock SSO login endpoints. Must stay false outside local development —
+    # dev-login mints a signed JWT for any user id with no credentials.
+    enable_dev_auth: bool = False
     pat_max_per_app: int = 3
     pat_max_per_user: int = 10
     pat_max_days: int = 90

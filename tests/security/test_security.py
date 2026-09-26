@@ -1,5 +1,6 @@
 """Security test cases."""
 import pytest, asyncio, re, json, hashlib
+import httpx
 from conftest import get_gw_headers, USER_SUB
 
 pytestmark = pytest.mark.asyncio
@@ -108,3 +109,30 @@ async def test_token_enumeration_negative_cache(gateway_client, redis_client):
 
     # Cleanup
     redis_client.delete(neg_key)
+
+# SEC-05: TXS must not mint an impersonated JWT for an unauthenticated caller.
+# Without this check anyone on the network could bypass PAT auth entirely by
+# asking TXS directly for a token for any user (GAP-02).
+async def test_txs_rejects_unauthenticated_caller():
+    from conftest import TXS_URL, USER_SUB
+    async with httpx.AsyncClient(base_url=TXS_URL, timeout=10) as raw:
+        resp = await raw.post("/internal/token-exchange", json={
+            "tokenId": "AAAAAAAAAAAA", "userSub": USER_SUB, "scopes": ["capi.vendor.read"],
+        })
+    assert resp.status_code == 403, f"Expected 403 without internal key, got {resp.status_code}"
+    assert resp.json().get("code") == "CDP-1005"
+    assert "accessToken" not in resp.text
+    print("✓ SEC-05: TXS rejects callers without the internal key")
+
+# SEC-06: portal-backend /internal/* leaks PAT metadata and accepts audit
+# records, so it must reject unauthenticated callers too (GAP-03).
+async def test_internal_endpoints_reject_unauthenticated(portal_client, valid_pat):
+    resp = await portal_client.get(f"/internal/pat/{valid_pat.token_id}")
+    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}"
+
+    forged = await portal_client.post("/internal/audit", json=[{
+        "event_type": "API_CALL", "token_id": valid_pat.token_id,
+        "user_sub": "u-forged", "status_code": 200,
+    }])
+    assert forged.status_code == 403, f"Audit ingest must reject forgery, got {forged.status_code}"
+    print("✓ SEC-06: /internal/* rejects callers without the internal key")

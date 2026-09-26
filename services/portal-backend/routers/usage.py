@@ -43,13 +43,38 @@ async def get_token_usage(
 
     quota = await db.fetchrow("SELECT * FROM cdp.quota_policy WHERE token_id=$1", token_id)
 
+    def _error_rate(calls: int, errors: int) -> float:
+        total = calls + errors
+        return round(errors / total, 4) if total else 0.0
+
+    series = [
+        {
+            "date": str(r["stat_date"]),
+            "calls": r["call_count"],
+            "errors": r["error_count"],
+            "errorRate": _error_rate(r["call_count"], r["error_count"]),
+            "avgLatencyMs": r["avg_latency"],
+            "p95LatencyMs": r["p95_latency"],
+        }
+        for r in rows
+    ]
+
+    total_calls = sum(s["calls"] for s in series)
+    total_errors = sum(s["errors"] for s in series)
+    # Call-weighted so a quiet day with one slow request doesn't skew the mean.
+    weighted_latency = sum(s["avgLatencyMs"] * s["calls"] for s in series)
+    summary = {
+        "totalCalls": total_calls,
+        "totalErrors": total_errors,
+        "errorRate": _error_rate(total_calls, total_errors),
+        "avgLatencyMs": round(weighted_latency / total_calls) if total_calls else 0,
+        "p95LatencyMs": max((s["p95LatencyMs"] for s in series), default=0),
+    }
+
     return {
         "tokenId": token_id,
-        "dailySeries": [
-            {"date": str(r["stat_date"]), "calls": r["call_count"],
-             "errors": r["error_count"], "avgLatencyMs": r["avg_latency"]}
-            for r in rows
-        ],
+        "dailySeries": series,
+        "summary": summary,
         "liveToday": {"calls": live_daily, "quota": quota["daily_quota"] if quota else 5000},
         "liveMonth": {"calls": live_monthly, "quota": quota["monthly_quota"] if quota else 100000},
     }

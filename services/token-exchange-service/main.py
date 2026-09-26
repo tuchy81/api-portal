@@ -8,6 +8,7 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 import redis_client as rc
 import circuit_breaker as cb_module
 import cache as jwt_cache
+import caller_auth
 import metrics as m
 from config import settings
 
@@ -23,6 +24,7 @@ app = FastAPI(title="Token Exchange Service")
 async def startup():
     r = rc.get_redis()
     rc.load_lua_scripts(r)
+    caller_auth.warn_if_unprotected()
     logger.info("TXS started. Redis connected.")
 
 # ---------------------------------------------------------------------------
@@ -44,13 +46,18 @@ class ExchangeResponse(BaseModel):
 # ---------------------------------------------------------------------------
 @app.post("/internal/token-exchange", response_model=ExchangeResponse)
 async def token_exchange(req: ExchangeRequest, request: Request):
+    denied = caller_auth.check_caller(request)
+    if denied:
+        return denied
+
     r = rc.get_redis()
 
     # Circuit breaker check
     if cb_module.is_circuit_open(r):
-        # Check if there's a cached JWT we can still use
-        import hashlib
-        sh = hashlib.sha256(" ".join(sorted(req.scopes)).encode()).hexdigest()[:8]
+        # Same scope hash as jwt_cache._scope_hash — must stay in lockstep
+        # (16 hex chars = 64 bits) so we look up the same cache key writers
+        # populated.
+        sh = jwt_cache._scope_hash(req.scopes)
         cached_jwt = r.get(f"cdp:jwt:{req.tokenId}:{sh}")
         if cached_jwt:
             from keycloak_client import _extract_jti

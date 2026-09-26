@@ -12,7 +12,7 @@ INSERT INTO cdp.api_scope (api_id, scope_name, http_method, path_pattern, descri
     ('a1000000-0000-0000-0000-000000000003', 'capi.hr.read',      'GET',  '/capi/v1/employees/**','직원 조회');
 
 -- 테스트용 승인된 신청 (u-test-001 → MDM-VENDOR)
-INSERT INTO cdp.application (app_id, api_id, user_sub, user_name, dept_code, purpose, expected_tps, expected_daily, valid_until, status, granted_scopes, reviewer_sub, reviewed_at) VALUES
+INSERT INTO cdp.application (app_id, api_id, user_sub, user_name, dept_code, purpose, expected_tps, expected_daily, valid_until, status, requested_scopes, granted_scopes, reviewer_sub, reviewed_at) VALUES
     ('b2000000-0000-0000-0000-000000000001',
      'a1000000-0000-0000-0000-000000000001',
      'u-test-001', '홍길동', 'IT기획팀',
@@ -20,14 +20,16 @@ INSERT INTO cdp.application (app_id, api_id, user_sub, user_name, dept_code, pur
      5, 2000, '2027-03-31',
      'APPROVED',
      ARRAY['capi.vendor.read'],
+     ARRAY['capi.vendor.read'],
      'u-test-002', now());
 
 -- 테스트용 PENDING 신청 (TC-P-01 테스트용)
-INSERT INTO cdp.application (app_id, api_id, user_sub, user_name, dept_code, purpose, expected_tps, expected_daily, valid_until, status, granted_scopes) VALUES
+INSERT INTO cdp.application (app_id, api_id, user_sub, user_name, dept_code, purpose, expected_tps, expected_daily, valid_until, status, requested_scopes, granted_scopes) VALUES
     ('b2000000-0000-0000-0000-000000000002',
      'a1000000-0000-0000-0000-000000000002',
      'u-test-001', '홍길동', 'IT기획팀',
      '수주 현황 자동 리포트',
      3, 1000, '2027-03-31',
      'PENDING',
+     ARRAY['capi.order.read'],
      '{}');

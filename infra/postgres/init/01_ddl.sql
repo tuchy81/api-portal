@@ -42,6 +42,7 @@ CREATE TABLE cdp.application (
     valid_until    DATE        NOT NULL,
     status         VARCHAR(30) NOT NULL DEFAULT 'PENDING'
                    CHECK (status IN ('PENDING','APPROVED','REJECTED','EXPIRED','WITHDRAWN')),
+    requested_scopes TEXT[]    NOT NULL DEFAULT '{}',
     granted_scopes TEXT[]      NOT NULL DEFAULT '{}',
     reviewer_sub   VARCHAR(64),
     review_comment TEXT,
@@ -52,12 +53,18 @@ CREATE INDEX idx_app_user   ON cdp.application(user_sub, status);
 CREATE INDEX idx_app_status ON cdp.application(status, created_at DESC);
 
 -- PAT
+-- token_hash: SHA256(secret) hex (64 chars). See services/portal-backend/pat_utils.py
+--   for why plain SHA256 is safe here (256bit CSPRNG secret, no dictionary space).
+-- token_hmac: HMAC-SHA256(server_key, secret) hex (64 chars). Kept in the DB so
+--   /internal/pat/{token_id} can return it on a Redis cache miss — pat-auth.lua
+--   verifies against this value even after eviction. Never expose to clients.
 CREATE TABLE cdp.pat (
     token_id     VARCHAR(12)  PRIMARY KEY,
     app_id       UUID         NOT NULL REFERENCES cdp.application(app_id),
     user_sub     VARCHAR(64)  NOT NULL,
     token_name   VARCHAR(100) NOT NULL,
-    token_hash   VARCHAR(255) NOT NULL,
+    token_hash   VARCHAR(64)  NOT NULL,
+    token_hmac   VARCHAR(64)  NOT NULL,
     scopes       TEXT[]       NOT NULL,
     status       VARCHAR(20)  NOT NULL DEFAULT 'ACTIVE'
                  CHECK (status IN ('ACTIVE','REVOKED','EXPIRED','INACTIVE')),
@@ -114,6 +121,11 @@ CREATE TABLE cdp.audit_log_2026_12 PARTITION OF cdp.audit_log
     FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
 CREATE TABLE cdp.audit_log_2027_01 PARTITION OF cdp.audit_log
     FOR VALUES FROM ('2027-01-01') TO ('2027-02-01');
+
+-- 안전망: 월별 파티션 생성 배치(BAT-CDP-06)가 어떤 이유로든 밀려도 INSERT가 실패하지
+-- 않도록 DEFAULT 파티션을 둔다. 배치는 여기 쌓인 행을 정상 파티션으로 옮기지 않으므로,
+-- DEFAULT에 행이 쌓이고 있다면 배치가 동작하지 않는다는 신호로 봐야 한다.
+CREATE TABLE cdp.audit_log_default PARTITION OF cdp.audit_log DEFAULT;
 
 -- 사용량 집계 (일 단위)
 CREATE TABLE cdp.usage_stat_daily (

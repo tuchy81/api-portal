@@ -16,7 +16,12 @@ end
 """
 
 def _scope_hash(scopes: list[str]) -> str:
-    return hashlib.sha256(" ".join(sorted(scopes)).encode()).hexdigest()[:8]
+    # 16 hex chars = 64 bits. Collisions are only meaningful within a single
+    # tokenId (see _cache_key), but the previous 32-bit truncation was tight
+    # enough that a token with many distinct scope combinations could hit one
+    # accidentally. Must stay in lockstep with pat-token-exchange.lua's
+    # scope_hash() — the gateway reads whichever key we wrote.
+    return hashlib.sha256(" ".join(sorted(scopes)).encode()).hexdigest()[:16]
 
 def _cache_key(token_id: str, scope_hash: str) -> str:
     return f"cdp:jwt:{token_id}:{scope_hash}"
@@ -57,7 +62,7 @@ async def get_or_exchange_jwt(
 
     if lock_acquired:
         try:
-            result = await keycloak_client.exchange_token(token_id, user_sub, scopes)
+            result = await keycloak_client.exchange_token(user_sub, scopes)
             jwt = result["access_token"]
             r.setex(ckey, settings.jwt_cache_ttl, jwt)
             r.sadd(_idx_key(token_id), ckey)
@@ -85,7 +90,7 @@ async def _refresh_jwt(token_id: str, user_sub: str, scopes: list[str], r: redis
         lkey = _lock_key(token_id, sh)
         if r.set(lkey, node_id, nx=True, px=5000):
             try:
-                result = await keycloak_client.exchange_token(token_id, user_sub, scopes)
+                result = await keycloak_client.exchange_token(user_sub, scopes)
                 r.setex(ckey, settings.jwt_cache_ttl, result["access_token"])
                 r.sadd(_idx_key(token_id), ckey)
                 r.expire(_idx_key(token_id), settings.jwt_ttl)
