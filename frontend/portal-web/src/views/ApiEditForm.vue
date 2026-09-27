@@ -23,13 +23,10 @@
           </el-select>
         </el-form-item>
 
-        <el-divider content-position="left">경로 설정</el-divider>
-        <p class="hint">공개 경로를 바꾸면 게이트웨이 라우트가 새 경로로 재생성됩니다(기존 라우트는 제거됨).</p>
-        <el-form-item label="공개 경로 (Public Path)" required>
+        <el-divider content-position="left">API 공개 주소 (Public Base)</el-divider>
+        <p class="hint">공개 주소를 바꾸면 이 API의 모든 Endpoint 라우트가 새 주소 기준으로 재생성됩니다(기존 라우트는 제거됨).</p>
+        <el-form-item label="Public Base" required>
           <el-input v-model="form.publicPath" />
-        </el-form-item>
-        <el-form-item label="업스트림 URL" required>
-          <el-input v-model="form.upstreamUrl" />
         </el-form-item>
 
         <el-divider content-position="left">OpenAPI 스펙</el-divider>
@@ -42,18 +39,25 @@
           {{ specSummary.title }} (v{{ specSummary.version }}) — 경로 {{ specSummary.pathCount }}개 인식됨
         </el-alert>
 
-        <el-divider content-position="left">스코프 <span class="required">*</span></el-divider>
-        <p class="hint">저장하면 아래 목록으로 전체 교체됩니다.</p>
+        <el-divider content-position="left">제공 API (Endpoint) <span class="required">*</span></el-divider>
+        <p class="hint">저장하면 아래 목록으로 전체 교체됩니다. Pattern은 Public Base에 붙는 상대 경로입니다.</p>
         <div v-for="(scope, i) in form.scopes" :key="i" class="scope-row">
-          <el-input v-model="scope.scopeName" placeholder="스코프 (예: capi.vendor.read)" class="scope-name" />
           <el-select v-model="scope.httpMethod" class="scope-method">
             <el-option v-for="m in HTTP_METHODS" :key="m" :label="m" :value="m" />
           </el-select>
-          <el-input v-model="scope.pathPattern" placeholder="경로 패턴 (예: /capi/v1/vendors)" class="scope-path" />
+          <el-input v-model="scope.pathPattern" placeholder="Pattern (예: /{id})" class="scope-path" />
+          <el-input v-model="scope.upstreamUrl" placeholder="Upstream Full URL" class="scope-upstream" />
+          <el-input v-model="scope.scopeName" placeholder="Scope (예: capi.vendor.read)" class="scope-name" />
           <el-input v-model="scope.description" placeholder="설명" class="scope-desc" />
           <el-button :icon="Close" circle size="small" :disabled="form.scopes.length === 1" @click="removeScope(i)" />
         </div>
-        <el-button :icon="Plus" @click="addScope">스코프 추가</el-button>
+        <div v-for="(scope, i) in form.scopes" :key="`preview-${i}`" class="preview-row">
+          <span class="preview-method">{{ scope.httpMethod }}</span>
+          <code class="preview-final">{{ finalPublicPath(scope.pathPattern) || '—' }}</code>
+          <span class="preview-arrow">→</span>
+          <code class="preview-upstream">{{ scope.upstreamUrl || '—' }}</code>
+        </div>
+        <el-button :icon="Plus" @click="addScope">Endpoint 추가</el-button>
 
         <div class="form-actions">
           <el-button type="primary" native-type="submit" :loading="submitting" @click="submit">저장</el-button>
@@ -92,10 +96,16 @@ const form = ref({
   description: '',
   ownerDept: '',
   publicPath: '',
-  upstreamUrl: '',
   status: 'DRAFT',
-  scopes: [{ scopeName: '', httpMethod: 'GET', pathPattern: '', description: '' }],
+  scopes: [{ scopeName: '', httpMethod: 'GET', pathPattern: '/', upstreamUrl: '', description: '' }],
 })
+
+function finalPublicPath(pattern: string): string {
+  const base = (form.value.publicPath || '').replace(/\/$/, '')
+  if (!base) return ''
+  if (!pattern || pattern === '/') return base
+  return base + '/' + pattern.replace(/^\//, '')
+}
 
 onMounted(async () => {
   try {
@@ -107,16 +117,16 @@ onMounted(async () => {
       description: data.description || '',
       ownerDept: data.owner_dept,
       publicPath: data.public_path,
-      upstreamUrl: data.upstream_url,
       status: data.status,
       scopes: data.scopes.length
         ? data.scopes.map((s: any) => ({
             scopeName: s.scope_name,
             httpMethod: s.http_method,
             pathPattern: s.path_pattern,
+            upstreamUrl: s.upstream_url || '',
             description: s.description || '',
           }))
-        : [{ scopeName: '', httpMethod: 'GET', pathPattern: '', description: '' }],
+        : [{ scopeName: '', httpMethod: 'GET', pathPattern: '/', upstreamUrl: '', description: '' }],
     }
   } catch (e: any) {
     ElMessage.error(e.response?.data?.detail?.message || 'API 정보를 불러오지 못했습니다.')
@@ -154,7 +164,7 @@ function onSpecFile(e: Event) {
 }
 
 function addScope() {
-  form.value.scopes.push({ scopeName: '', httpMethod: 'GET', pathPattern: '', description: '' })
+  form.value.scopes.push({ scopeName: '', httpMethod: 'GET', pathPattern: '/', upstreamUrl: '', description: '' })
 }
 
 function removeScope(i: number) {
@@ -173,7 +183,6 @@ async function submit() {
       description: form.value.description,
       ownerDept: form.value.ownerDept,
       publicPath: form.value.publicPath,
-      upstreamUrl: form.value.upstreamUrl,
       status: form.value.status,
       scopes: form.value.scopes,
       ...(openapiSpec.value ? { openapiSpec: openapiSpec.value } : {}),
@@ -197,10 +206,16 @@ h2 { margin-bottom: 1.5rem; }
 .required { color: #c62828; }
 .hint { font-size: 0.8rem; color: #666; margin: 0 0 0.8rem; }
 .scope-row { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; align-items: center; }
-.scope-name { flex: 2; }
 .scope-method { flex: 0 0 100px; }
-.scope-path { flex: 2; }
-.scope-desc { flex: 2; }
+.scope-path { flex: 1.2; }
+.scope-upstream { flex: 3; }
+.scope-name { flex: 1.8; }
+.scope-desc { flex: 1.5; }
+.preview-row { display: flex; gap: 0.5rem; align-items: center; font-size: 0.8rem; color: #444; margin: 0.15rem 0; }
+.preview-method { flex: 0 0 60px; font-weight: 600; color: #1e40af; }
+.preview-final { flex: 1.2; word-break: break-all; }
+.preview-arrow { color: #999; }
+.preview-upstream { flex: 3; word-break: break-all; color: #444; }
 .form-actions { padding-top: 1rem; margin-top: 1rem; border-top: 1px solid #eee; display: flex; gap: 0.5rem; }
 .loading-box { min-height: 200px; }
 </style>

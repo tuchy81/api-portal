@@ -12,6 +12,7 @@ from database import get_pool
 import apisix_client
 import batch
 import audit_consumer
+import db_migrations
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("portal")
@@ -65,14 +66,19 @@ async def resync_gateway_routes():
         }
 
     for row in rows:
-        api_row = {"api_code": row["api_code"], "upstream_url": row["upstream_url"], "public_path": row["public_path"]}
-        scope_rows = [
-            {"scope_name": s["scope_name"], "http_method": s["http_method"], "path_pattern": s["path_pattern"]}
+        api_row = {"api_code": row["api_code"], "public_path": row["public_path"]}
+        endpoints = [
+            {
+                "scope_name": s["scope_name"],
+                "http_method": s["http_method"],
+                "path_pattern": s["path_pattern"],
+                "upstream_url": s["upstream_url"],
+            }
             for s in scopes_by_api[row["api_id"]]
         ]
         for attempt in range(10):
             try:
-                await apisix_client.upsert_route(api_row, scope_rows)
+                await apisix_client.upsert_api_routes(api_row, endpoints)
                 break
             except Exception as e:
                 if attempt == 9:
@@ -87,7 +93,12 @@ _audit_consumer_task: asyncio.Task | None = None
 @app.on_event("startup")
 async def startup():
     global _audit_consumer_task
-    await get_pool()
+    pool = await get_pool()
+    # Idempotent schema migrations for existing pgdata volumes — init/*.sql
+    # only runs on empty volumes, so this is what upgrades an existing DB in
+    # place. Must run before resync_gateway_routes touches the (post-migration)
+    # api_scope.upstream_url column.
+    await db_migrations.run_all(pool)
     batch.start_scheduler()
     asyncio.create_task(resync_gateway_routes())
     # pat-audit.lua XADDs security events to cdp:audit:security; this task
