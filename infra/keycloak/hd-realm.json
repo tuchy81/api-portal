@@ -1,0 +1,283 @@
+{
+  "realm": "hd",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": false,
+  "accessTokenLifespan": 300,
+  "roles": {
+    "realm": [
+      { "name": "citizen-developer" },
+      { "name": "mdm-reader" },
+      { "name": "api-owner" },
+      { "name": "platform-admin" },
+      { "name": "service-account" }
+    ]
+  },
+  "users": [
+    {
+      "id": "u-test-001",
+      "username": "hong.gildong",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Gildong",
+      "lastName": "Hong",
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ],
+      "realmRoles": ["citizen-developer", "mdm-reader"],
+      "attributes": {
+        "user_id": ["EMP10001"],
+        "company": ["HDHI"],
+        "org_cd": ["ORG-IT"],
+        "asgn_cd": ["ASG-DEV"],
+        "dept_cd": ["DEPT-IT01"],
+        "job_tit_cd": ["JOB-STAFF"],
+        "offi_res_cd": ["RES-SEOUL"],
+        "user_origin": ["INTERNAL"]
+      }
+    },
+    {
+      "id": "u-test-002",
+      "username": "api.owner",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Api",
+      "lastName": "Owner",
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ],
+      "realmRoles": ["api-owner", "citizen-developer"],
+      "attributes": {
+        "user_id": ["EMP10002"],
+        "company": ["HDHI"],
+        "org_cd": ["ORG-MDM"],
+        "asgn_cd": ["ASG-OWNER"],
+        "dept_cd": ["DEPT-MDM01"],
+        "job_tit_cd": ["JOB-LEAD"],
+        "offi_res_cd": ["RES-SEOUL"],
+        "user_origin": ["INTERNAL"]
+      }
+    },
+    {
+      "id": "u-admin-001",
+      "username": "platform.admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Platform",
+      "lastName": "Admin",
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ],
+      "realmRoles": ["platform-admin", "citizen-developer"],
+      "attributes": {
+        "user_id": ["EMP90001"],
+        "company": ["HDHI"],
+        "org_cd": ["ORG-PLATFORM"],
+        "asgn_cd": ["ASG-ADMIN"],
+        "dept_cd": ["DEPT-PLAT01"],
+        "job_tit_cd": ["JOB-MANAGER"],
+        "offi_res_cd": ["RES-SEOUL"],
+        "user_origin": ["INTERNAL"]
+      }
+    },
+    {
+      "id": "a453587",
+      "username": "lee.changyob",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Changyob",
+      "lastName": "Lee",
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ],
+      "realmRoles": ["citizen-developer"],
+      "attributes": {
+        "user_id": ["a453587"],
+        "company": ["HDHI"],
+        "org_cd": ["ORG-IT"],
+        "asgn_cd": ["ASG-DEV"],
+        "dept_cd": ["DEPT-IT01"],
+        "job_tit_cd": ["JOB-STAFF"],
+        "offi_res_cd": ["RES-SEOUL"],
+        "user_origin": ["INTERNAL"]
+      }
+    },
+    {
+      "username": "service-account-citizen-gw-exchanger",
+      "enabled": true,
+      "serviceAccountClientId": "citizen-gw-exchanger",
+      "clientRoles": {
+        "realm-management": ["impersonation", "view-users", "query-users"]
+      }
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "internal-api-gateway",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": true
+    },
+    {
+      "clientId": "citizen-gw-exchanger",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "exchanger-secret-xyz",
+      "fullScopeAllowed": true,
+      "attributes": {
+        "access.token.lifespan": "300",
+        "token.exchange.grant.enabled": "true",
+        "oauth2.token.exchange.grant.enabled": "true"
+      },
+      "defaultClientScopes": ["web-origins", "profile", "roles", "email"],
+      "optionalClientScopes": ["address", "phone", "offline_access"],
+      "protocolMappers": [
+        {
+          "name": "cdp_channel",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": {
+            "claim.name": "cdp_channel",
+            "claim.value": "citizen",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "aud-internal-api-gateway",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "internal-api-gateway",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "user_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "user_id",
+            "claim.name": "user_id",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "company",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "company",
+            "claim.name": "company",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "org_cd",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "org_cd",
+            "claim.name": "org_cd",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "asgn_cd",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "asgn_cd",
+            "claim.name": "asgn_cd",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "dept_cd",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "dept_cd",
+            "claim.name": "dept_cd",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "job_tit_cd",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "job_tit_cd",
+            "claim.name": "job_tit_cd",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "offi_res_cd",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "offi_res_cd",
+            "claim.name": "offi_res_cd",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "user_origin",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "user_origin",
+            "claim.name": "user_origin",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ]
+}

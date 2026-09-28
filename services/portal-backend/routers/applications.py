@@ -57,9 +57,14 @@ async def create_application(
 
     # Requested scopes must exist in the catalog — this is the upstream half of
     # R-08; the approval path then grants a subset of what was requested.
+    # DISTINCT because the same required_scope can be attached to multiple
+    # endpoints (e.g. capi.vendor.read on both GET / and GET /{id}).
     catalog_scopes = {
-        r["scope_name"]
-        for r in await db.fetch("SELECT scope_name FROM cdp.api_scope WHERE api_id=$1", uuid.UUID(req.apiId))
+        r["required_scope"]
+        for r in await db.fetch(
+            "SELECT DISTINCT required_scope FROM cdp.api_endpoint WHERE api_id=$1",
+            uuid.UUID(req.apiId),
+        )
     }
     if not req.requestedScopes:
         return cdp_error("CDP-4001", "At least one scope must be requested", "/applications")
@@ -147,8 +152,11 @@ async def patch_application(
         # Re-checking the catalog here matters because scopes can be removed
         # between application and approval.
         catalog_scopes = {
-            r["scope_name"]
-            for r in await db.fetch("SELECT scope_name FROM cdp.api_scope WHERE api_id=$1", app["api_id"])
+            r["required_scope"]
+            for r in await db.fetch(
+                "SELECT DISTINCT required_scope FROM cdp.api_endpoint WHERE api_id=$1",
+                app["api_id"],
+            )
         }
         granted = [s for s in (app["requested_scopes"] or []) if s in catalog_scopes]
         if not granted:

@@ -19,7 +19,7 @@ async def test_full_e2e_workflow(portal_client, gateway_client, redis_client, us
     api_id = str(apis[0]["api_id"])
     r = await portal_client.get(f"/portal/v1/catalog/apis/{api_id}", headers={"Authorization": f"Bearer {user_jwt}"})
     assert r.status_code == 200
-    assert "scopes" in r.json()
+    assert "endpoints" in r.json()
     print(f"[2] API detail OK: {r.json()['name']}")
 
     # 3. Issue PAT from pre-approved application

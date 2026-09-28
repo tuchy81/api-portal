@@ -3,8 +3,8 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import requests, json
 
-KC_URL = os.getenv("KC_URL", "http://localhost:8180")
-PORTAL_URL = os.getenv("PORTAL_URL", "http://localhost:8080")
+KC_URL = os.getenv("KC_URL", "http://localhost:8080")
+PORTAL_URL = os.getenv("PORTAL_URL", "http://localhost:8082")
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:9080")
 
 def get_user_token(user_sub: str = "u-test-001") -> str:

@@ -16,20 +16,27 @@
 
       <el-descriptions :column="2" border class="meta">
         <el-descriptions-item label="API 코드">{{ apiDetail.api_code }}</el-descriptions-item>
-        <el-descriptions-item label="공개 경로"><code>{{ apiDetail.public_path }}</code></el-descriptions-item>
+        <el-descriptions-item label="Public Base"><code>{{ apiDetail.public_path }}</code></el-descriptions-item>
         <el-descriptions-item label="소유 부서">{{ apiDetail.owner_dept }}</el-descriptions-item>
         <el-descriptions-item label="상태">
           <el-tag :type="statusTagType">{{ apiDetail.status }}</el-tag>
         </el-descriptions-item>
       </el-descriptions>
 
-      <h3 class="section-title">허용 Scope</h3>
-      <el-table :data="apiDetail.scopes" border size="small">
-        <el-table-column prop="scope_name" label="Scope"><template #default="{ row }"><code>{{ row.scope_name }}</code></template></el-table-column>
+      <h3 class="section-title">제공 Endpoint</h3>
+      <el-table :data="apiDetail.endpoints" border size="small">
         <el-table-column prop="http_method" label="Method" width="100">
           <template #default="{ row }"><el-tag size="small" effect="plain">{{ row.http_method }}</el-tag></template>
         </el-table-column>
-        <el-table-column prop="path_pattern" label="Path Pattern"><template #default="{ row }"><code>{{ row.path_pattern }}</code></template></el-table-column>
+        <el-table-column label="Public Endpoint">
+          <template #default="{ row }"><code>{{ finalPublicPath(row.path_pattern) }}</code></template>
+        </el-table-column>
+        <el-table-column label="Upstream Full URL">
+          <template #default="{ row }"><code>{{ row.upstream_url || '—' }}</code></template>
+        </el-table-column>
+        <el-table-column prop="required_scope" label="Required Scope" width="200">
+          <template #default="{ row }"><code>{{ row.required_scope }}</code></template>
+        </el-table-column>
         <el-table-column prop="description" label="설명" />
       </el-table>
 
@@ -72,6 +79,12 @@ const statusTagType = computed(() => {
   const map: Record<string, string> = { PUBLISHED: 'success', DRAFT: 'info', DEPRECATED: 'warning', RETIRED: 'danger' }
   return map[apiDetail.value?.status] || 'info'
 })
+
+function finalPublicPath(pattern: string): string {
+  const base = (apiDetail.value?.public_path || '').replace(/\/$/, '')
+  if (!pattern || pattern === '/') return base || '/'
+  return base + '/' + pattern.replace(/^\//, '')
+}
 
 onMounted(async () => {
   const { data } = await api.get(`/catalog/apis/${route.params.apiId}`)

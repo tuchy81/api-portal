@@ -12,6 +12,7 @@ from database import get_pool
 import apisix_client
 import batch
 import audit_consumer
+import db_migrations
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("portal")
@@ -59,20 +60,25 @@ async def resync_gateway_routes():
     pool = await get_pool()
     async with pool.acquire() as db:
         rows = await db.fetch("SELECT * FROM cdp.api_catalog WHERE status='PUBLISHED'")
-        scopes_by_api = {
-            row["api_id"]: await db.fetch("SELECT * FROM cdp.api_scope WHERE api_id=$1", row["api_id"])
+        endpoints_by_api = {
+            row["api_id"]: await db.fetch("SELECT * FROM cdp.api_endpoint WHERE api_id=$1", row["api_id"])
             for row in rows
         }
 
     for row in rows:
-        api_row = {"api_code": row["api_code"], "upstream_url": row["upstream_url"], "public_path": row["public_path"]}
-        scope_rows = [
-            {"scope_name": s["scope_name"], "http_method": s["http_method"], "path_pattern": s["path_pattern"]}
-            for s in scopes_by_api[row["api_id"]]
+        api_row = {"api_code": row["api_code"], "public_path": row["public_path"]}
+        endpoints = [
+            {
+                "required_scope": e["required_scope"],
+                "http_method": e["http_method"],
+                "path_pattern": e["path_pattern"],
+                "upstream_url": e["upstream_url"],
+            }
+            for e in endpoints_by_api[row["api_id"]]
         ]
         for attempt in range(10):
             try:
-                await apisix_client.upsert_route(api_row, scope_rows)
+                await apisix_client.upsert_api_routes(api_row, endpoints)
                 break
             except Exception as e:
                 if attempt == 9:
@@ -87,7 +93,12 @@ _audit_consumer_task: asyncio.Task | None = None
 @app.on_event("startup")
 async def startup():
     global _audit_consumer_task
-    await get_pool()
+    pool = await get_pool()
+    # Idempotent schema migrations for existing pgdata volumes — init/*.sql
+    # only runs on empty volumes, so this is what upgrades an existing DB in
+    # place. Must run before resync_gateway_routes touches the (post-migration)
+    # api_endpoint.upstream_url / required_scope columns.
+    await db_migrations.run_all(pool)
     batch.start_scheduler()
     asyncio.create_task(resync_gateway_routes())
     # pat-audit.lua XADDs security events to cdp:audit:security; this task

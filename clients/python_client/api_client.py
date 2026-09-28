@@ -37,7 +37,7 @@ class CitizenApiClient:
 
 class PortalApiClient:
     """Portal management client — requires SSO JWT."""
-    def __init__(self, jwt: str, portal_url: str = "http://localhost:8080"):
+    def __init__(self, jwt: str, portal_url: str = "http://localhost:8082"):
         self.jwt = jwt
         self.portal_url = portal_url
         self.session = requests.Session()

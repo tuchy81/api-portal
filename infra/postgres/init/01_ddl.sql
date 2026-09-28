@@ -1,6 +1,8 @@
 CREATE SCHEMA IF NOT EXISTS cdp;
 
 -- 공개 API 카탈로그
+-- Public Base(public_path)만 API 단위로 정의한다. 실제 Backend 호출 주소는
+-- Endpoint 단위(cdp.api_endpoint.upstream_url)에서 관리한다.
 CREATE TABLE cdp.api_catalog (
     api_id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     api_code        VARCHAR(64)  NOT NULL UNIQUE,
@@ -8,7 +10,6 @@ CREATE TABLE cdp.api_catalog (
     description     TEXT,
     owner_dept      VARCHAR(100) NOT NULL,
     owner_sub       VARCHAR(64)  NOT NULL,
-    upstream_url    VARCHAR(500) NOT NULL,
     public_path     VARCHAR(200) NOT NULL UNIQUE,
     openapi_spec    JSONB,
     required_roles  TEXT[]       NOT NULL DEFAULT '{}',
@@ -18,15 +19,21 @@ CREATE TABLE cdp.api_catalog (
     updated_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
--- API Scope 정의
-CREATE TABLE cdp.api_scope (
-    scope_id     UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    api_id       UUID        NOT NULL REFERENCES cdp.api_catalog(api_id) ON DELETE CASCADE,
-    scope_name   VARCHAR(100) NOT NULL,
-    http_method  VARCHAR(10)  NOT NULL,
-    path_pattern VARCHAR(300) NOT NULL,
-    description  VARCHAR(300),
-    UNIQUE (api_id, scope_name, http_method, path_pattern)
+-- API Endpoint 정의
+-- 행 하나가 하나의 Public Endpoint(Method + Public Base + path_pattern)이다.
+-- path_pattern은 Public Base에 붙는 상대 경로(예: '/', '/{id}', '/summary'),
+-- upstream_url은 이 Endpoint가 실제로 호출할 Backend Full URL,
+-- required_scope는 이 Endpoint 호출에 필요한 OAuth Scope(PAT.scopes와 대조)다.
+-- required_scope는 여러 Endpoint에 공유될 수 있다(예: capi.vendor.read → GET /, GET /{id}).
+CREATE TABLE cdp.api_endpoint (
+    endpoint_id     UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    api_id          UUID         NOT NULL REFERENCES cdp.api_catalog(api_id) ON DELETE CASCADE,
+    required_scope  VARCHAR(100) NOT NULL,
+    http_method     VARCHAR(10)  NOT NULL,
+    path_pattern    VARCHAR(300) NOT NULL,
+    upstream_url    VARCHAR(500) NOT NULL,
+    description     VARCHAR(300),
+    UNIQUE (api_id, http_method, path_pattern)
 );
 
 -- 사용 신청

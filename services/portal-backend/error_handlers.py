@@ -11,8 +11,10 @@ CDP_ERRORS = {
     "CDP-2001": (503, "Authorization service unavailable"),
     "CDP-2002": (502, "Upstream error"),
     "CDP-4001": (400, "Request validation failed"),
+    "CDP-4002": (400, "Catalog validation failed"),
     "CDP-4003": (403, "Portal authorization denied"),
     "CDP-4009": (409, "Resource state conflict"),
+    "CDP-4010": (409, "Endpoint already exists"),
 }
 
 def cdp_error(code: str, detail: str, instance: str = "/", trace_id: str = "") -> JSONResponse:
