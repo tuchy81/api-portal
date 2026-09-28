@@ -156,7 +156,7 @@ def build_endpoint_route(api: dict, endpoint: dict) -> dict:
                 # decide which scope is required — must be the *final* public
                 # path, not the relative Endpoint Pattern (spec section 9).
                 "pattern": source_regex,
-                "scope": endpoint["scope_name"],
+                "scope": endpoint["required_scope"],
             }
         ]
     }

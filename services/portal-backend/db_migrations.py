@@ -12,6 +12,18 @@ import asyncpg
 logger = logging.getLogger("portal.db_migrations")
 
 
+async def _table_exists(db: asyncpg.Connection, table: str) -> bool:
+    return bool(
+        await db.fetchval(
+            """SELECT EXISTS (
+                   SELECT 1 FROM information_schema.tables
+                   WHERE table_schema='cdp' AND table_name=$1
+               )""",
+            table,
+        )
+    )
+
+
 async def _column_exists(db: asyncpg.Connection, table: str, column: str) -> bool:
     return bool(
         await db.fetchval(
@@ -27,13 +39,15 @@ async def _column_exists(db: asyncpg.Connection, table: str, column: str) -> boo
 
 async def _migrate_endpoint_upstream(db: asyncpg.Connection) -> None:
     """SA-CHG-CDP-API-001: move `upstream_url` from api_catalog (API-level) to
-    api_scope (Endpoint-level). Skips itself once api_scope.upstream_url is
-    NOT NULL and api_catalog.upstream_url is gone."""
+    the endpoint table (Endpoint-level). Runs against the old table/column
+    names (`api_scope`, `scope_name`), which the next migration renames."""
+    if not await _table_exists(db, "api_scope"):
+        # Already renamed by _migrate_scope_table_to_endpoint or fresh install.
+        return
     has_scope_upstream = await _column_exists(db, "api_scope", "upstream_url")
     has_catalog_upstream = await _column_exists(db, "api_catalog", "upstream_url")
 
     if has_scope_upstream and not has_catalog_upstream:
-        # Already at target schema.
         return
 
     logger.info("running migration: endpoint-upstream model (SA-CHG-CDP-API-001)")
@@ -68,11 +82,7 @@ async def _migrate_endpoint_upstream(db: asyncpg.Connection) -> None:
 
         # Best-effort backfill for any user-registered APIs. Reproduces the
         # old rewrite (/capi/vN(.*) -> upstream_path$1) by attaching everything
-        # after the /capi/vN prefix onto the API's base upstream — so a scope
-        # like `/capi/v1/vendors/{id}` under upstream `http://svc/internal/api/v1`
-        # becomes upstream `http://svc/internal/api/v1/vendors/{id}` (resource
-        # segment preserved). The new relative pattern strips the Public Base,
-        # not the version prefix, since it must join back onto public_path.
+        # after the /capi/vN prefix onto the API's base upstream.
         if has_catalog_upstream:
             await db.execute(
                 r"""UPDATE cdp.api_scope s
@@ -104,6 +114,32 @@ async def _migrate_endpoint_upstream(db: asyncpg.Connection) -> None:
     logger.info("migration completed: endpoint-upstream model")
 
 
+async def _migrate_scope_table_to_endpoint(db: asyncpg.Connection) -> None:
+    """Rename api_scope → api_endpoint and clarify the field that pat-auth
+    actually uses as an OAuth scope reference. Idempotent — skips if the new
+    shape is already in place."""
+    has_new_table = await _table_exists(db, "api_endpoint")
+    has_old_table = await _table_exists(db, "api_scope")
+
+    if has_new_table and not has_old_table:
+        return
+    if not has_old_table:
+        return
+
+    logger.info("running migration: api_scope → api_endpoint rename")
+    async with db.transaction():
+        # Rename table first, then columns. Existing FKs/PKs follow the
+        # table automatically; unique constraint on (api_id, http_method,
+        # path_pattern) is preserved by name.
+        await db.execute("ALTER TABLE cdp.api_scope RENAME TO api_endpoint")
+        if await _column_exists(db, "api_endpoint", "scope_id"):
+            await db.execute("ALTER TABLE cdp.api_endpoint RENAME COLUMN scope_id TO endpoint_id")
+        if await _column_exists(db, "api_endpoint", "scope_name"):
+            await db.execute("ALTER TABLE cdp.api_endpoint RENAME COLUMN scope_name TO required_scope")
+    logger.info("migration completed: api_endpoint")
+
+
 async def run_all(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as db:
         await _migrate_endpoint_upstream(db)
+        await _migrate_scope_table_to_endpoint(db)

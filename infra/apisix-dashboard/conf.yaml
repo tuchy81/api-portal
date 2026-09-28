@@ -1,0 +1,25 @@
+conf:
+  listen:
+    host: 0.0.0.0
+    port: 9000
+  # Same etcd + prefix that citizen-gateway (APISIX) uses so the Dashboard
+  # sees the exact routes portal-backend provisions via the Admin API.
+  etcd:
+    endpoints:
+      - "http://etcd:2379"
+    prefix: /apisix
+  log:
+    error_log:
+      level: warn
+      file_path: logs/error.log
+    access_log:
+      file_path: logs/access.log
+
+authentication:
+  # Dev-only secret / creds. Change (or externalize via env) before any
+  # non-local deployment.
+  secret: dev-dashboard-secret-change-me
+  expire_time: 3600
+  users:
+    - username: admin
+      password: admin

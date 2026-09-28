@@ -223,6 +223,22 @@ services:
       mock-internal-gw:
         condition: service_started
 
+  # APISIX Dashboard — read/write view of the same etcd citizen-gateway uses.
+  # Portal Backend is the source of truth for routes (upserts via APISIX Admin
+  # API on catalog create/patch and on startup resync), so anything edited
+  # here will be overwritten on the next Portal-driven reconcile. Use it for
+  # inspection/debug rather than authoring.
+  apisix-dashboard:
+    image: apache/apisix-dashboard:3.0.1-alpine
+    volumes:
+      - ./infra/apisix-dashboard/conf.yaml:/usr/local/apisix-dashboard/conf/conf.yaml:ro
+    ports:
+      - "9000:9000"
+    networks: [zone2-net]
+    depends_on:
+      etcd:
+        condition: service_healthy
+
   portal-web:
     build: ./frontend/portal-web
     ports:

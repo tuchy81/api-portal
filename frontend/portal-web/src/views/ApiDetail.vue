@@ -24,7 +24,7 @@
       </el-descriptions>
 
       <h3 class="section-title">제공 Endpoint</h3>
-      <el-table :data="apiDetail.scopes" border size="small">
+      <el-table :data="apiDetail.endpoints" border size="small">
         <el-table-column prop="http_method" label="Method" width="100">
           <template #default="{ row }"><el-tag size="small" effect="plain">{{ row.http_method }}</el-tag></template>
         </el-table-column>
@@ -34,8 +34,8 @@
         <el-table-column label="Upstream Full URL">
           <template #default="{ row }"><code>{{ row.upstream_url || '—' }}</code></template>
         </el-table-column>
-        <el-table-column prop="scope_name" label="Scope" width="200">
-          <template #default="{ row }"><code>{{ row.scope_name }}</code></template>
+        <el-table-column prop="required_scope" label="Required Scope" width="200">
+          <template #default="{ row }"><code>{{ row.required_scope }}</code></template>
         </el-table-column>
         <el-table-column prop="description" label="설명" />
       </el-table>

@@ -9,13 +9,12 @@
           <template #header>
             스코프 선택 <span class="required">*</span>
           </template>
-          <p class="hint">필요한 권한만 선택하세요. 승인 시 서버가 카탈로그 정의와 교집합으로 부여합니다.</p>
+          <p class="hint">필요한 권한만 선택하세요. 승인 시 서버가 카탈로그 정의와 교집합으로 부여합니다. 하나의 Scope는 여러 Endpoint에 공유될 수 있습니다.</p>
           <el-checkbox-group v-model="form.requestedScopes">
-            <div v-for="s in availableScopes" :key="s.scope_id || s.scope_name" class="scope-option">
-              <el-checkbox :value="s.scope_name">
-                <code>{{ s.scope_name }}</code>
-                <span class="scope-meta">{{ s.http_method }} {{ s.path_pattern }}</span>
-                <span v-if="s.description" class="scope-desc">— {{ s.description }}</span>
+            <div v-for="s in availableScopes" :key="s.scope" class="scope-option">
+              <el-checkbox :value="s.scope">
+                <code>{{ s.scope }}</code>
+                <span class="scope-meta">— 적용 Endpoint: {{ s.endpoints.join(', ') }}</span>
               </el-checkbox>
             </div>
           </el-checkbox-group>
@@ -74,7 +73,21 @@ const form = ref({
   requestedScopes: [] as string[],
 })
 
-const availableScopes = computed<any[]>(() => apiDetail.value?.scopes || [])
+// Collapse endpoints down to distinct required_scope values; each row shows
+// which endpoints that scope unlocks so the applicant can pick the least
+// permission that still covers what they need. Mirrors the backend's
+// DISTINCT required_scope catalog_scopes set.
+const availableScopes = computed<{ scope: string; endpoints: string[] }[]>(() => {
+  const map = new Map<string, string[]>()
+  for (const e of apiDetail.value?.endpoints || []) {
+    const s = e.required_scope
+    if (!s) continue
+    const label = `${e.http_method} ${e.path_pattern}`
+    if (!map.has(s)) map.set(s, [])
+    map.get(s)!.push(label)
+  }
+  return Array.from(map.entries()).map(([scope, endpoints]) => ({ scope, endpoints }))
+})
 
 onMounted(async () => {
   try {
